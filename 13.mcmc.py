@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import numpy as np
+from config import *
 import json
 import argparse
 from datetime import datetime
@@ -27,12 +28,6 @@ from obspy.taup.taup_create import build_taup_model
 # ============================================================
 # 路徑設定
 # ============================================================
-
-HEFESTO_MAIN   = "/Users/chingchen/Desktop/HeFESTo/main"
-PAR_DIR        = "/Users/chingchen/Desktop/HeFESTo/PAR/HeFESTo_Parameters_010123"
-MCMC_DIR       = "/Users/chingchen/Desktop/HeFESTo/mcmc"
-KHAN_MODEL_DIR = "/Users/chingchen/Desktop/Lunar/Mars_Khan_2023/LSL_Models"
-TAUP_DATA_DIR  = "/opt/anaconda3/lib/python3.9/site-packages/obspy/taup/data"
 
 G_MARS        = 3.35
 MARS_RADIUS   = 3389.5
@@ -472,9 +467,16 @@ def read_fort56(fort56_path):
     return {'depth_km': depth, 'Vp': Vp, 'Vs': Vs, 'rho': rho}
 
 def build_taup(fort56_data, model_name):
-    npz_path = os.path.join(TAUP_DATA_DIR, f'{model_name}.npz')
+    os.makedirs(TAUP_WORK_DIR, exist_ok=True)
+
+    # 🔥 防止 .npz.npz
+    model_name = model_name.replace(".npz", "")
+
+    npz_path = os.path.join(TAUP_WORK_DIR, f'{model_name}.npz')
+    nd_path  = os.path.join(TAUP_WORK_DIR, f"{model_name}.nd")
+
     if os.path.exists(npz_path):
-        return TauPyModel(model=model_name)
+        return TauPyModel(model=npz_path)
 
     khan      = compute_khan_median()
     cmb_depth = khan['cmb_depth']
@@ -493,31 +495,40 @@ def build_taup(fort56_data, model_name):
     if len(man_depth) == 0:
         raise ValueError("地幔深度範圍不足")
 
-    nd_path = f"{model_name}.nd"
     with open(nd_path, 'w') as f:
         for d, vp, vs, r in zip(khan['crust_z'], khan['crust_vp'],
                                   khan['crust_vs'], khan['crust_rho']):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
+
         f.write("mantle\n")
+
         for d, vp, vs, r in zip(man_depth, man_Vp, man_Vs, man_rho):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
 
-        last_d = man_depth[-1]; last_vp = man_Vp[-1]; last_rho = man_rho[-1]
+        last_d = man_depth[-1]
+        last_vp = man_Vp[-1]
+        last_rho = man_rho[-1]
+
         f.write(f"{last_d:.3f}  {last_vp:.4f}  0.0000  {last_rho:.4f}\n")
         f.write("outer-core\n")
 
         core_z   = khan['core_z']
         core_vp  = khan['core_vp']
         core_rho = khan['core_rho']
+
         mask     = core_z >= last_d
-        core_z   = core_z[mask]; core_vp = core_vp[mask]; core_rho = core_rho[mask]
+        core_z   = core_z[mask]
+        core_vp  = core_vp[mask]
+        core_rho = core_rho[mask]
 
         f.write(f"{last_d:.3f}  {core_vp[0]:.4f}  0.0000  {core_rho[0]:.4f}\n")
+
         for d, vp, r in zip(core_z[1:], core_vp[1:], core_rho[1:]):
             f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
 
-    build_taup_model(nd_path)
-    return TauPyModel(model=model_name)
+    build_taup_model(nd_path, output_folder=TAUP_WORK_DIR)
+
+    return TauPyModel(model=npz_path)
 
 def compute_misfit(taup_model, obs_dataset):
     total = 0.0; n = 0

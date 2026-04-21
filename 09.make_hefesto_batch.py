@@ -31,6 +31,7 @@ HeFESTo 批次執行腳本（最終版）
 
 import os
 import shutil
+from config import *
 import subprocess
 import numpy as np
 import json
@@ -38,12 +39,12 @@ from datetime import datetime
 from multiprocessing import Pool
 
 # ============================================================
-# 路徑設定
+# Path
 # ============================================================
 
-HEFESTO_MAIN = "/Users/chingchen/Desktop/HeFESTo/main"
-PAR_DIR      = "/Users/chingchen/Desktop/HeFESTo/PAR/HeFESTo_Parameters_010123"
-RUNS_DIR     = "/Users/chingchen/Desktop/HeFESTo/runs"
+HEFESTO_MAIN = HEFESTO_MAIN
+PAR_DIR      = PAR_DIR
+RUNS_DIR     = RUNS_DIR
 
 # ============================================================
 # 先驗範圍

@@ -381,7 +381,7 @@ def print_convergence_report(trimmed_chains):
     return all_ok
 
 # ============================================================
-# 統計摘要
+# Summary
 # ============================================================
 
 def print_summary(samples, misfits):
@@ -409,7 +409,7 @@ def print_summary(samples, misfits):
         ess = effective_sample_size(samples[p])
         print(f"  {p:<8}: ESS ≈ {ess:.0f}")
 
-    # 換算成物理量
+    
     print("\n posterior from Mg# YM2020: ")
     mgfe_total = YM_BASE['Mg'] + YM_BASE['Fe']
     mg_med = np.median(samples['Mg#']) * mgfe_total
@@ -426,7 +426,7 @@ def print_summary(samples, misfits):
     print(f"  YM2020 Mg# = {YM_MGNUM:.4f}")
 
 # ============================================================
-# 主程式
+# Main code 
 # ============================================================
 
 def main():
@@ -466,21 +466,16 @@ def main():
     print("\n[4] Gelman-Rubin R-hat")
     print_convergence_report(trimmed)
 
-    # 合併樣本
     samples, misfits = get_all_samples(trimmed)
 
-    # 統計摘要
     print_summary(samples, misfits)
-
-    # 邊際後驗
     print("\n[5] plot_marginal_posteriors")
     plot_marginal_posteriors(samples, misfits, output_dir)
 
-    # Corner plot
     print("\n[6] plot_corner")
     plot_corner(samples, output_dir)
 
-    # Misfit vs 參數
+
     print("\n[7] plot_misfit_vs_params")
     plot_misfit_vs_params(samples, misfits, output_dir)
 

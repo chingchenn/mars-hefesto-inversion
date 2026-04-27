@@ -1,14 +1,13 @@
 """
-MCMC 反演火星地幔溫度和組成
+MCMC inverse Mars 
 =====================================
-算法：Metropolis-Hastings
-數據：Samuel 2023 走時數據
-正演：HeFESTo + TauP
+Using Metropolis-Hastings
+Data from Samuel 2023 traveltime results
+Forward: HeFESTo + TauP
 
-使用方式：
-    python mcmc.py --test              # 測試 1 步
-    python mcmc.py --chain 0 --steps 100  # 跑 chain 0，100 步
-    python mcmc.py --chain 1 --steps 100  # 跑 chain 1，100 步（同時開不同 terminal）
+
+    python mcmc.py --test              # test 1 step
+    python mcmc.py --chain 0 --steps 100  # run chain 0 for 100 steps
 """
 
 import os
@@ -26,17 +25,73 @@ from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
 
 # ============================================================
-# 路徑設定
+# path
 # ============================================================
 
-G_MARS        = 3.35
 MARS_RADIUS   = 3389.5
 T_SURF        = 220.0
 P_MAX_GPA     = 22.0
 
-# ============================================================
-# 起始點（model_001281，misfit/datum = 0.749）
-# ============================================================
+_GRAVITY_DEPTH = None   # km
+_GRAVITY_G     = None   # m/s²
+
+def load_gravity_profile():
+    """
+    rho_profiles from Samuel 2023, calculate g as a function of depth
+    """
+    global _GRAVITY_DEPTH, _GRAVITY_G
+    if _GRAVITY_DEPTH is not None:
+        return
+
+    rho_path = os.path.join(os.path.dirname(__file__), 'rho_profile.dat')
+    if not os.path.exists(rho_path):
+        rho_path = SAMUEL_RHO_PROFILE_PATH
+
+    try:
+        data    = np.loadtxt(rho_path)
+        rho_all = data[:, 0]   # kg/m³
+        r_all   = data[:, 1]   # km
+    except Exception as e:
+        print(f"can not load rho_profile.dat ({e}), used  g=3.45 instead ")
+        _GRAVITY_DEPTH = np.array([0.0, 1600.0])
+        _GRAVITY_G     = np.array([3.45, 3.45])
+        return
+
+    idx = np.argsort(r_all)
+    rho = rho_all[idx]
+    r   = r_all[idx] * 1000   # m
+
+    # integral M(r) = 4π ∫₀ʳ ρ r'² dr'
+    G_CONST = 6.674e-11
+    M_enc   = np.zeros(len(r))
+    for i in range(1, len(r)):
+        dr      = r[i] - r[i-1]
+        rho_mid = (rho[i] + rho[i-1]) / 2
+        r_mid   = (r[i]   + r[i-1])   / 2
+        M_enc[i] = M_enc[i-1] + 4 * np.pi * rho_mid * r_mid**2 * dr
+
+    g = np.zeros(len(r))
+    g[1:] = G_CONST * M_enc[1:] / r[1:]**2
+
+    depth_km = (r[-1] - r) / 1000   # km
+
+    sort_idx       = np.argsort(depth_km)
+    _GRAVITY_DEPTH = depth_km[sort_idx]
+    _GRAVITY_G     = g[sort_idx]
+    print(f"  gravity profile loaded at surface  {_GRAVITY_G[0]:.3f} m/s²，"
+          f"CMB (~1533 km) {np.interp(1533, _GRAVITY_DEPTH, _GRAVITY_G):.3f} m/s²")
+
+
+def gravity_mars(depth_km):
+    """
+    插值計算火星重力 [m/s²]
+    depth_km：從地表算的深度，可以是 float 或 ndarray
+    """
+    if _GRAVITY_DEPTH is None:
+        load_gravity_profile()
+    return np.interp(depth_km, _GRAVITY_DEPTH, _GRAVITY_G)
+
+# initial guess
 YM_BASE = {
     'Si': 4.01931,
     'Mg': 4.08235,
@@ -52,7 +107,6 @@ MGFE_TOTAL = YM_BASE['Mg'] + YM_BASE['Fe']
 START_PARAMS = {
     'T_lit': 1952.92,
     'P_lit': 6.0755,
-    'dTdP':  8.8266,
     'Mg#':   YM_BASE['Mg'] / (YM_BASE['Mg'] + YM_BASE['Fe']),
 }
 
@@ -64,30 +118,24 @@ FIXED_PARAMS = {
     'Cr': YM_BASE['Cr'],
 }
 
-# ============================================================
-# Prior 範圍
-# ============================================================
+# Prior range
 
 PRIOR = {
     'T_lit': (1000.0, 2600.0),
     'P_lit': (1.5,    9.0),
-    'dTdP':  (5.0,    20.0),
     'Mg#':  (0.50,    0.86),
 }
 
-# ============================================================
-# 初始步長（prior 範圍的 10%）
-# ============================================================
+# initial step
 
 STEP = {
-    'T_lit': 60.0,
+    'T_lit': 40.0,
     'P_lit': 0.3,
-    'dTdP':  0.6,
     'Mg#':  0.015,
 }
 
 # ============================================================
-# 觀測數據誤差
+# Observations
 # ============================================================
 
 SIGMA = {
@@ -104,65 +152,68 @@ SIGMA = {
     'SKS-PP': 10.0,
 }
 
-# Samuel 2023 觀測數據
+# Samuel 2023 observations
 SAMUEL_DATA = {
-    'S0154a': {'delta': 29.9, 'depth': 22.0,
+    'S0154a': {'delta': 29.7,  'depth': 17.4,
                'SS-S': 25.3, 'SSS-S': 35.0},
-    'S0173a': {'delta': 30.9, 'depth': 20.9,
+    'S0173a': {'delta': 30.9,  'depth': 28.4,
                'S-P': 178.8, 'sP-P': 9.43, 'PP-P': 19.9, 'PPP-P': 34.4,
                'sS-S': 13.2, 'SS-S': 24.4, 'SSS-S': 40.5, 'ScS-S': 345.2},
-    'S0235b': {'delta': 30.1, 'depth': 21.2,
+    'S0185a': {'delta': 54.8,  'depth': 17.4,
+               'S-P': 327.28, 'pP-P': 4.0, 'PP-P': 22.47, 'PPP-P': 49.3,
+               'sS-S': 10.0, 'SS-S': 30.9, 'SSS-S': 55.4, 'ScS-S': 152.3},
+    'S0235b': {'delta': 30.5,  'depth': 26.1,
                'S-P': 171.4, 'PP-P': 18.6, 'PPP-P': 32.0,
                'sS-S': 9.2, 'SS-S': 23.2, 'SSS-S': 33.3, 'ScS-S': 343.9},
-    'S0325a': {'delta': 41.9, 'depth': 30.9,
+    'S0325a': {'delta': 42.0,  'depth': 33.8,
                'S-P': 229.3, 'pP-P': 9.8, 'PP-P': 21.1, 'PPP-P': 34.4,
                'sS-S': 13.8, 'SS-S': 26.1, 'SSS-S': 50.3, 'ScS-S': 220.4},
-    'S0407a': {'delta': 28.7, 'depth': 21.1,
+    'S0407a': {'delta': 29.1,  'depth': 31.3,
                'S-P': 170.7, 'pP-P': 6.77, 'PP-P': 23.38,
                'sS-S': 13.3, 'SS-S': 21.1, 'SSS-S': 33.1, 'ScS-S': 370.0},
-    'S0409d': {'delta': 29.7, 'depth': 26.2,
+    'S0409d': {'delta': 30.6,  'depth': 26.1,
                'S-P': 163.2, 'pP-P': 8.3, 'PP-P': 27.6, 'PPP-P': 36.94,
                'sS-S': 8.4, 'SS-S': 20.9, 'SSS-S': 39.8, 'ScS-S': 320.1},
-    'S0474a': {'delta': 20.5, 'depth': 24.1,
+    'S0474a': {'delta': 20.7,  'depth': 30.7,
                'S-P': 121.6, 'PP-P': 13.4, 'PPP-P': 24.8,
                'SS-S': 15.8, 'SSS-S': 32.4},
-    'S0484b': {'delta': 28.7, 'depth': 21.1,
+    'S0484b': {'delta': 31.3,  'depth': 24.9,
                'S-P': 173.1, 'pP-P': 5.5, 'PP-P': 19.73,
                'sS-S': 13.0, 'SS-S': 17.4, 'ScS-S': 322.3},
-    'S0784a': {'delta': 30.0, 'depth': 12.9,
+    'S0784a': {'delta': 30.2,  'depth': 16.8,
                'S-P': 179.3, 'pP-P': 6.5, 'PP-P': 13.7, 'PPP-P': 22.4,
                'sS-S': 7.2, 'SS-S': 19.6, 'SSS-S': 28.0},
-    'S0802a': {'delta': 28.9, 'depth': 15.8,
+    'S0802a': {'delta': 30.0,  'depth': 20.4,
                'S-P': 180.3, 'pP-P': 4.0, 'PP-P': 25.6, 'PPP-P': 33.9,
                'sS-S': 9.3, 'SS-S': 22.4, 'SSS-S': 36.5, 'ScS-S': 387.6},
-    'S0809a': {'delta': 30.6, 'depth': 12.1,
+    'S0809a': {'delta': 30.7,  'depth': 16.0,
                'S-P': 191.95, 'pP-P': 4.5, 'PP-P': 16.25, 'PPP-P': 29.65,
                'sS-S': 8.1, 'SS-S': 23.8, 'SSS-S': 39.3, 'ScS-S': 373.5},
-    'S0820a': {'delta': 30.1, 'depth': 15.4,
+    'S0820a': {'delta': 28.1,  'depth': 18.7,
                'S-P': 174.1, 'PP-P': 21.9, 'PPP-P': 32.1, 'sS-S': 8.5},
-    'S0861a': {'delta': 55.3, 'depth': 34.3,
+    'S0861a': {'delta': 54.5,  'depth': 15.5,
                'S-P': 319.3, 'PP-P': 19.6, 'PPP-P': 47.6, 'SS-S': 41.1},
-    'S0864a': {'delta': 29.9, 'depth': 23.9,
+    'S0864a': {'delta': 29.0,  'depth': 25.0,
                'S-P': 171.4, 'PP-P': 18.0, 'PPP-P': 27.9,
                'sS-S': 17.3, 'SS-S': 26.4},
-    'S0916d': {'delta': 30.2, 'depth': 11.1,
+    'S0916d': {'delta': 30.2,  'depth': 16.3,
                'S-P': 170.8, 'pP-P': 3.9, 'PP-P': 19.3, 'PPP-P': 36.1,
                'SS-S': 19.0, 'SSS-S': 42.9, 'ScS-S': 342.8},
-    'S0918a': {'delta': 16.9, 'depth': 16.9,
+    'S0918a': {'delta': 16.6,  'depth': 22.3,
                'S-P': 102.4, 'PP-P': 12.8, 'PPP-P': 22.5,
                'SS-S': 21.2, 'SSS-S': 35.0},
-    'S0976a': {'delta': 143.6, 'depth': 13.5,
+    'S0976a': {'delta': 144.0, 'depth': 30.0,
                'SS-PP': 854.4, 'SKS-PP': 303.9},
-    'S1000a': {'delta': 125.9, 'depth': 0.0,
+    'S1000a': {'delta': 125.9, 'depth': 0.0, 
                'SS-PP': 749.0, 'SKS-PP': 339.3},
-    'S1094b': {'delta': 58.5,  'depth': 0.0,
+    'S1094b': {'delta': 58.5,  'depth': 0.0,  
                'S-P': 343.0},
-    'S1222a': {'delta': 37.3,  'depth': 14.9,
+    'S1222a': {'delta': 36.1,  'depth': 32.8,
                'S-P': 216.0, 'ScS-S': 258.0},
 }
 
 # ============================================================
-# Khan 中位數（全域快取）
+# Khan velocity models
 # ============================================================
 
 _KHAN_CACHE = None
@@ -173,7 +224,7 @@ def compute_khan_median():
         return _KHAN_CACHE
 
     files = sorted(glob.glob(os.path.join(KHAN_MODEL_DIR, 'Model_*.txt')))
-    print(f"讀取 {len(files)} 個 Khan models...")
+    print(f"read {len(files)}  Khan models...")
 
     crust_z = np.linspace(0, 100, 200)
     core_z  = np.linspace(1500, MARS_RADIUS, 200)
@@ -210,7 +261,7 @@ def compute_khan_median():
             continue
 
     cmb_median = float(np.median(cmb_depths))
-    print(f"  CMB 中位數深度：{cmb_median:.0f} km")
+    print(f"  CMB depth {cmb_median:.0f} km")
 
     _KHAN_CACHE = {
         'crust_z':   crust_z,
@@ -225,16 +276,9 @@ def compute_khan_median():
     }
     return _KHAN_CACHE
 
-# ============================================================
-# 電荷平衡
-# ============================================================
+# compute oxygen
 
 def composition_from_params(params):
-    """
-    用 4 個反演參數產生完整 HeFESTo composition。
-    保持 YM2020 的 Si, Ca, Al, Na, Cr 固定，
-    只用 Mg# 重新分配 Mg 和 Fe，且保持 Mg+Fe 總量不變。
-    """
     mgnum = params['Mg#']
 
     Mg = mgnum * MGFE_TOTAL
@@ -250,7 +294,6 @@ def composition_from_params(params):
         'Cr': FIXED_PARAMS['Cr'],
         'T_lit': params['T_lit'],
         'P_lit': params['P_lit'],
-        'dTdP': params['dTdP'],
     }
     return p
 
@@ -260,9 +303,7 @@ def compute_oxygen(p):
             1.5 * p['Al'] + 0.5 * p.get('Na', FIXED_PARAMS['Na']) +
             1.5 * p.get('Cr', FIXED_PARAMS['Cr']))
 
-# ============================================================
-# HeFESTo 正演
-# ============================================================
+# HeFESTo Forward
 
 CONTROL_PHASES = """\
 phase plg
@@ -394,32 +435,12 @@ phase fee
 fee
 """
 
-def make_pressure_array():
-    return np.concatenate([
-        np.linspace(1.04,  6.82,  100),
-        np.linspace(6.88,  13.97, 100),
-        np.linspace(14.03, 22.93, 115),
-    ])
-
-def make_temperature_profile(P_array, T_lit, P_lit, dTdP):
-    T_start = 800.0  # 地幔頂部溫度（約對應 Moho 溫度）
-    return np.where(
-        P_array <= P_lit,
-        T_start + (T_lit - T_start) * (P_array / P_lit),
-        T_lit + dTdP * (P_array - P_lit)
-    )
 
 
-def run_hefesto(params, run_dir):
-    """跑 HeFESTo，回傳 fort.56 路徑或 None"""
-    os.makedirs(run_dir, exist_ok=True)
-
-    p = composition_from_params(params)
-    O = compute_oxygen(p)
-
-    # 寫 control
-    lines = [
-        f"0,{P_MAX_GPA:.0f},50,0,0,0,-1,0,0",
+def make_control_lines(p, O, line1):
+    """產生 HeFESTo control 檔（共用部分）"""
+    return [
+        line1,
         "8,2,4,2", "oxides",
         f"Si      {p['Si']:.5f}     {p['Si']:.5f}    0",
         f"Mg      {p['Mg']:.5f}     {p['Mg']:.5f}    0",
@@ -431,38 +452,132 @@ def run_hefesto(params, run_dir):
         f" O      {O:.5f}     {O:.5f}    0",
         "1,1,1,1", PAR_DIR, "73", CONTROL_PHASES,
     ]
+
+
+def run_hefesto_single(run_dir, control_lines, ad_in_content=None):
+    """跑一次 HeFESTo，回傳 fort.56 路徑或 None"""
+    os.makedirs(run_dir, exist_ok=True)
+
     with open(os.path.join(run_dir, "control"), 'w') as f:
-        f.write("\n".join(lines))
+        f.write("\n".join(control_lines))
 
-    # 寫 ad.in
-    P_array = make_pressure_array()
-    T_array = make_temperature_profile(P_array, p['T_lit'], p['P_lit'], p['dTdP'])
-    with open(os.path.join(run_dir, "ad.in"), 'w') as f:
-        for P, T in zip(P_array, T_array):
-            f.write(f"{P:.6f} 0.000000 {T:.6f}\n")
+    if ad_in_content is not None:
+        with open(os.path.join(run_dir, "ad.in"), 'w') as f:
+            f.write(ad_in_content)
 
-    # cp main
     main_dst = os.path.join(run_dir, "main")
     if not os.path.exists(main_dst):
         shutil.copy2(HEFESTO_MAIN, main_dst)
         os.chmod(main_dst, 0o755)
 
-    # 執行
     log_path = os.path.join(run_dir, "hefesto.log")
     try:
         with open(log_path, 'w') as log:
-            result = subprocess.run(
-                ["./main"], cwd=run_dir,
-                stdout=log, stderr=log, timeout=600)
-    except subprocess.TimeoutExpired:
-        return None
-    except Exception:
+            subprocess.run(["./main"], cwd=run_dir,
+                           stdout=log, stderr=log, timeout=3600)
+    except (subprocess.TimeoutExpired, Exception):
         return None
 
     fort56 = os.path.join(run_dir, "fort.56")
     if not os.path.exists(fort56) or os.path.getsize(fort56) == 0:
         return None
     return fort56
+
+
+def read_entropy_at_P(fort56_path, target_P):
+    """
+    從 fort.56 讀出最接近 target_P 的 entropy [J/g/K]。
+    fort.56 欄位：P, Depth, T, rho, Vbulk, VS, VP, VS_att, VP_att,
+                  Enthalpy, Entropy, alpha, Cp, K_T, QS, QP, rho_q, phase
+    Entropy 是第 11 欄（index 10）
+    """
+    try:
+        with open(fort56_path) as f:
+            f.readline()
+            cols = f.readline().split()
+        df = pd.read_csv(fort56_path, sep=r'\s+', skiprows=2, names=cols)
+        if df.empty:
+            return None
+        P_col = df.columns[0]
+        S_col = df.columns[10]
+        idx   = (df[P_col] - target_P).abs().idxmin()
+        S     = float(df[S_col].iloc[idx])
+        T_val = float(df[df.columns[2]].iloc[idx])
+        print(f"    Step1: P={df[P_col].iloc[idx]:.3f} GPa, "
+              f"T={T_val:.1f} K, S={S:.5f} J/g/K")
+        return S
+    except Exception as e:
+        print(f"    read_entropy 失敗: {e}")
+        return None
+
+
+def run_hefesto(params, run_dir):
+    """
+    絕熱版 HeFESTo 正演：
+    Step1 (NPT): P_lit, T_lit → 取得 S_lit（entropy）
+    Step2 (NPS): 從 S_lit 沿 isentrope 積分到 P_MAX → 絕熱溫度剖面
+    Step3 (NPT with ad.in): 傳導段 + 絕熱段合併，跑最終計算
+    """
+    p = composition_from_params(params)
+    O = compute_oxygen(p)
+    T_lit = p['T_lit']
+    P_lit = p['P_lit']
+
+    # ── Step 1: NPT 在 P_lit, T_lit 取得 S_lit ──
+    dir1     = os.path.join(run_dir, "s1_npt")
+    line1    = f"{P_lit:.4f},{P_lit:.4f},1,{T_lit:.2f},{T_lit:.2f},0,0,0,0"
+    fort56_1 = run_hefesto_single(dir1, make_control_lines(p, O, line1))
+    if fort56_1 is None:
+        print("    Step1 失敗")
+        return None
+
+    S_lit = read_entropy_at_P(fort56_1, P_lit)
+    if S_lit is None:
+        return None
+
+    # ── Step 2: NPS isentrope 從 P_lit 到 P_MAX ──
+    dir2  = os.path.join(run_dir, "s2_nps")
+    line2 = (f"{P_lit:.4f},{P_MAX_GPA:.1f},20,"
+             f"{S_lit:.6f},{S_lit:.6f},0,-2,{T_lit:.2f},0")
+    fort56_2 = run_hefesto_single(dir2, make_control_lines(p, O, line2))
+    if fort56_2 is None:
+        print("    Step2 失敗")
+        return None
+
+    # 讀取 Step2 的 T(P) 剖面
+    try:
+        with open(fort56_2) as f:
+            f.readline(); cols = f.readline().split()
+        df2    = pd.read_csv(fort56_2, sep=r'\s+', skiprows=2, names=cols)
+        P_adiab = df2[df2.columns[0]].values
+        T_adiab = df2[df2.columns[2]].values
+    except Exception as e:
+        print(f"    讀取 Step2 失敗: {e}")
+        return None
+
+    # ── 合併：傳導段（地表→P_lit）+ 絕熱段（P_lit→P_MAX）──
+    # 傳導段：從 T_SURF（220K）線性升溫到 T_lit
+    n_cond  = 100
+    P_cond  = np.linspace(1.04, P_lit, n_cond)
+    T_cond  = T_SURF + (T_lit - T_SURF) * (P_cond / P_lit)
+
+    P_full  = np.concatenate([P_cond, P_adiab])
+    T_full  = np.concatenate([T_cond, T_adiab])
+
+    # 排序去重
+    sort_idx            = np.argsort(P_full)
+    P_full, T_full      = P_full[sort_idx], T_full[sort_idx]
+    _, uniq             = np.unique(P_full, return_index=True)
+    P_full, T_full      = P_full[uniq], T_full[uniq]
+
+    # ── Step 3: 用完整 T profile 跑最終計算 ──
+    dir3     = os.path.join(run_dir, "s3_final")
+    line3    = f"0,{P_MAX_GPA:.0f},50,0,0,0,-1,0,0"
+    ad_in    = "".join(f"{P:.6f} 0.000000 {T:.6f}\n"
+                       for P, T in zip(P_full, T_full))
+    fort56_3 = run_hefesto_single(dir3, make_control_lines(p, O, line3),
+                                  ad_in_content=ad_in)
+    return fort56_3
 
 # ============================================================
 # TauP 正演
@@ -488,16 +603,20 @@ def read_fort56(fort56_path):
 
     dP    = np.diff(P_GPa) * 1e9
     rho_m = (rho[:-1] + rho[1:]) / 2
-    dz    = dP / (rho_m * 1000 * G_MARS) / 1000
     depth = np.zeros(len(P_GPa))
-    depth[1:] = np.cumsum(dz)
+    for i in range(len(dP)):
+        g_i      = gravity_mars(depth[i])          # m/s²
+        rho_si   = rho_m[i] * 1000                 # kg/m³
+        dz_i     = dP[i] / (rho_si * g_i) / 1000  # km
+        depth[i+1] = depth[i] + dz_i
 
     return {'depth_km': depth, 'Vp': Vp, 'Vs': Vs, 'rho': rho}
+
 
 def build_taup(fort56_data, model_name):
     os.makedirs(TAUP_WORK_DIR, exist_ok=True)
 
-    # 🔥 防止 .npz.npz
+ 
     model_name = model_name.replace(".npz", "")
 
     npz_path = os.path.join(TAUP_WORK_DIR, f'{model_name}.npz')
@@ -652,16 +771,12 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     """
     chain_dir = os.path.join(MCMC_DIR, f"{prefix}_{chain_id:02d}")
     os.makedirs(chain_dir, exist_ok=True)
-    #chain_dir = os.path.join(MCMC_DIR, f"chain_{chain_id:02d}")
-    #os.makedirs(chain_dir, exist_ok=True)
 
-    # 讀取 Khan 中位數（一次）
+    load_gravity_profile()
     compute_khan_median()
 
-    # 初始化
     rng = np.random.default_rng(42 + chain_id)
 
-    # 起始點：用 start_params 或 START_PARAMS
     current = start_params.copy() if start_params else START_PARAMS.copy()
 
     # 如果有之前的 chain 記錄，從最後一步繼續
@@ -672,14 +787,14 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             chain = json.load(f)
         if chain:
             current = chain[-1]['params']
-            print(f"Chain {chain_id}：從第 {len(chain)} 步繼續")
+            print(f"Chain {chain_id}, start from  {len(chain)} steps")
 
     step_start = len(chain)
     accept_count = 0
 
-    print(f"\nChain {chain_id} 開始")
-    print(f"  起始 misfit：計算中...")
-    print(f"  目標步數：{n_steps}")
+    print(f"\nChain {chain_id} begin")
+    print(f"  initial misfitstart")
+    print(f"  target steps {n_steps}")
     print("=" * 60)
 
     # 計算起始點的 misfit
@@ -690,10 +805,10 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         model_name = f"mcmc_c{chain_id:02d}_current"
         current_misfit, _ = forward(current, run_dir, model_name)
         if current_misfit is None:
-            print("  起始點 HeFESTo 失敗！請換一個起始點")
+            print("  start point HeFESTo fail, please change another start point")
             return
 
-    print(f"  起始 misfit/datum = {current_misfit:.4f}")
+    print(f"  initial misfit/datum = {current_misfit:.4f}")
 
     # MCMC 主迴圈
     for step in range(step_start, step_start + n_steps):
@@ -749,17 +864,17 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         if (step + 1) % 10 == 0:
             with open(chain_file, 'w') as f:
                 json.dump(chain, f, indent=2)
-            print(f"  [儲存 chain_{chain_id:02d}，共 {len(chain)} 步]")
+            print(f"  [save chain_{chain_id:02d}, in total  {len(chain)} ]")
 
     # 最終儲存
     with open(chain_file, 'w') as f:
         json.dump(chain, f, indent=2)
 
     total_steps = step_start + n_steps
-    print(f"\nChain {chain_id} 完成！")
-    print(f"  總步數：{total_steps}")
-    print(f"  最終 accept rate：{accept_count/(n_steps)*100:.1f}%")
-    print(f"  最終 misfit：{current_misfit:.4f}")
+    print(f"\nChain {chain_id} finish!")
+    print(f"  total step:{total_steps}")
+    print(f"  final accept rate：{accept_count/(n_steps)*100:.1f}%")
+    print(f"  final misfit：{current_misfit:.4f}")
 
 # ============================================================
 # 入口
@@ -770,7 +885,7 @@ if __name__ == "__main__":
     parser.add_argument('--chain', type=int, default=0,
                         help='Chain 編號（0, 1, 2, ...）')
     parser.add_argument('--steps', type=int, default=100,
-                        help='步數（預設 100）')
+                        help='step（預設 100）')
     parser.add_argument('--test', action='store_true',
                         help='只跑 1 步測試')
     parser.add_argument('--prefix', type=str, default='chain',

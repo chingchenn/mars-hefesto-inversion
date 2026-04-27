@@ -1,13 +1,10 @@
 """
-MCMC inverse Mars 
-=====================================
-Using Metropolis-Hastings
-Data from Samuel 2023 traveltime results
-Forward: HeFESTo + TauP
-
-
-    python mcmc.py --test              # test 1 step
-    python mcmc.py --chain 0 --steps 100  # run chain 0 for 100 steps
+13_mcmc_4p_v3.py
+================
+與 v2 的差異：
+- 移除 Step2（NPS ensemble）
+- 改用 Step1 fort.56 的 K_S 自己積分絕熱梯度
+- 每步只跑 Step1 + Step3，速度約為 v2 的 2/3
 """
 
 import os
@@ -25,43 +22,41 @@ from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
 
 # ============================================================
-# path
+# 常數
 # ============================================================
 
-MARS_RADIUS   = 3389.5
-T_SURF        = 220.0
-P_MAX_GPA     = 22.0
+MARS_RADIUS = 3389.5
+T_SURF      = 220.0
+P_MAX_GPA   = 22.0
+GAMMA       = 1.1    # Grüneisen parameter（火星地幔平均值）
 
-_GRAVITY_DEPTH = None   # km
-_GRAVITY_G     = None   # m/s²
+# ============================================================
+# 重力剖面
+# ============================================================
+
+_GRAVITY_DEPTH = None
+_GRAVITY_G     = None
 
 def load_gravity_profile():
-    """
-    rho_profiles from Samuel 2023, calculate g as a function of depth
-    """
     global _GRAVITY_DEPTH, _GRAVITY_G
     if _GRAVITY_DEPTH is not None:
         return
 
-    rho_path = os.path.join(os.path.dirname(__file__), 'rho_profile.dat')
-    if not os.path.exists(rho_path):
-        rho_path = SAMUEL_RHO_PROFILE_PATH
-
+    rho_path = SAMUEL_RHO_PROFILE_PATH
     try:
         data    = np.loadtxt(rho_path)
-        rho_all = data[:, 0]   # kg/m³
-        r_all   = data[:, 1]   # km
+        rho_all = data[:, 0]
+        r_all   = data[:, 1]
     except Exception as e:
-        print(f"can not load rho_profile.dat ({e}), used  g=3.45 instead ")
+        print(f"警告：無法讀取 rho_profile.dat ({e})，使用固定 g=3.45")
         _GRAVITY_DEPTH = np.array([0.0, 1600.0])
         _GRAVITY_G     = np.array([3.45, 3.45])
         return
 
     idx = np.argsort(r_all)
     rho = rho_all[idx]
-    r   = r_all[idx] * 1000   # m
+    r   = r_all[idx] * 1000
 
-    # integral M(r) = 4π ∫₀ʳ ρ r'² dr'
     G_CONST = 6.674e-11
     M_enc   = np.zeros(len(r))
     for i in range(1, len(r)):
@@ -73,35 +68,27 @@ def load_gravity_profile():
     g = np.zeros(len(r))
     g[1:] = G_CONST * M_enc[1:] / r[1:]**2
 
-    depth_km = (r[-1] - r) / 1000   # km
-
+    depth_km = (r[-1] - r) / 1000
     sort_idx       = np.argsort(depth_km)
     _GRAVITY_DEPTH = depth_km[sort_idx]
     _GRAVITY_G     = g[sort_idx]
-    print(f"  gravity profile loaded at surface  {_GRAVITY_G[0]:.3f} m/s²，"
+    print(f"  重力剖面載入：地表 {_GRAVITY_G[0]:.3f} m/s²，"
           f"CMB (~1533 km) {np.interp(1533, _GRAVITY_DEPTH, _GRAVITY_G):.3f} m/s²")
 
 
 def gravity_mars(depth_km):
-    """
-    插值計算火星重力 [m/s²]
-    depth_km：從地表算的深度，可以是 float 或 ndarray
-    """
     if _GRAVITY_DEPTH is None:
         load_gravity_profile()
     return np.interp(depth_km, _GRAVITY_DEPTH, _GRAVITY_G)
 
-# initial guess
-YM_BASE = {
-    'Si': 4.01931,
-    'Mg': 4.08235,
-    'Fe': 1.08599,
-    'Ca': 0.27259,
-    'Al': 0.37376,
-    'Na': 0.10105,
-    'Cr': 0.06146,
-}
+# ============================================================
+# 組成與參數
+# ============================================================
 
+YM_BASE = {
+    'Si': 4.01931, 'Mg': 4.08235, 'Fe': 1.08599,
+    'Ca': 0.27259, 'Al': 0.37376, 'Na': 0.10105, 'Cr': 0.06146,
+}
 MGFE_TOTAL = YM_BASE['Mg'] + YM_BASE['Fe']
 
 START_PARAMS = {
@@ -111,51 +98,30 @@ START_PARAMS = {
 }
 
 FIXED_PARAMS = {
-    'Si': YM_BASE['Si'],
-    'Ca': YM_BASE['Ca'],
-    'Al': YM_BASE['Al'],
-    'Na': YM_BASE['Na'],
-    'Cr': YM_BASE['Cr'],
+    'Si': YM_BASE['Si'], 'Ca': YM_BASE['Ca'], 'Al': YM_BASE['Al'],
+    'Na': YM_BASE['Na'], 'Cr': YM_BASE['Cr'],
 }
-
-# Prior range
 
 PRIOR = {
     'T_lit': (1000.0, 2600.0),
     'P_lit': (1.5,    9.0),
-    'Mg#':  (0.50,    0.86),
+    'Mg#':   (0.50,   0.86),
 }
-
-# initial step
 
 STEP = {
-    'T_lit': 40.0,
+    'T_lit': 60.0,
     'P_lit': 0.3,
-    'Mg#':  0.015,
+    'Mg#':   0.015,
 }
-
-# ============================================================
-# Observations
-# ============================================================
 
 SIGMA = {
-    'S-P':    10.0,
-    'pP-P':    3.0,
-    'sP-P':    5.0,
-    'PP-P':    8.0,
-    'PPP-P':  12.0,
-    'sS-S':    5.0,
-    'SS-S':    5.0,
-    'SSS-S':   8.0,
-    'ScS-S':  12.0,
-    'SS-PP':  10.0,
-    'SKS-PP': 10.0,
+    'S-P': 10.0, 'pP-P': 3.0, 'sP-P': 5.0, 'PP-P': 8.0, 'PPP-P': 12.0,
+    'sS-S': 5.0, 'SS-S': 5.0, 'SSS-S': 8.0, 'ScS-S': 12.0,
+    'SS-PP': 10.0, 'SKS-PP': 10.0,
 }
 
-# Samuel 2023 observations
 SAMUEL_DATA = {
-    'S0154a': {'delta': 29.7,  'depth': 17.4,
-               'SS-S': 25.3, 'SSS-S': 35.0},
+    'S0154a': {'delta': 29.7,  'depth': 17.4, 'SS-S': 25.3, 'SSS-S': 35.0},
     'S0173a': {'delta': 30.9,  'depth': 28.4,
                'S-P': 178.8, 'sP-P': 9.43, 'PP-P': 19.9, 'PPP-P': 34.4,
                'sS-S': 13.2, 'SS-S': 24.4, 'SSS-S': 40.5, 'ScS-S': 345.2},
@@ -204,16 +170,15 @@ SAMUEL_DATA = {
                'SS-S': 21.2, 'SSS-S': 35.0},
     'S0976a': {'delta': 144.0, 'depth': 30.0,
                'SS-PP': 854.4, 'SKS-PP': 303.9},
-    'S1000a': {'delta': 125.9, 'depth': 0.0, 
+    'S1000a': {'delta': 125.9, 'depth': 0.0,
                'SS-PP': 749.0, 'SKS-PP': 339.3},
-    'S1094b': {'delta': 58.5,  'depth': 0.0,  
-               'S-P': 343.0},
+    'S1094b': {'delta': 58.5,  'depth': 0.0, 'S-P': 343.0},
     'S1222a': {'delta': 36.1,  'depth': 32.8,
                'S-P': 216.0, 'ScS-S': 258.0},
 }
 
 # ============================================================
-# Khan velocity models
+# Khan 中位數
 # ============================================================
 
 _KHAN_CACHE = None
@@ -224,7 +189,7 @@ def compute_khan_median():
         return _KHAN_CACHE
 
     files = sorted(glob.glob(os.path.join(KHAN_MODEL_DIR, 'Model_*.txt')))
-    print(f"read {len(files)}  Khan models...")
+    print(f"讀取 {len(files)} 個 Khan models...")
 
     crust_z = np.linspace(0, 100, 200)
     core_z  = np.linspace(1500, MARS_RADIUS, 200)
@@ -238,21 +203,17 @@ def compute_khan_median():
             data  = np.loadtxt(fpath, comments='#')
             depth = data[:, 0]; Vp = data[:, 1]
             Vs    = data[:, 2]; rho = data[:, 3]
-
             solid_mask = Vs > 0.01
             core_mask  = Vs < 0.01
             if solid_mask.sum() < 5 or core_mask.sum() < 5:
                 continue
-
             cmb_depths.append(depth[core_mask][0])
             sd = depth[solid_mask]; svp = Vp[solid_mask]
             svs = Vs[solid_mask];   sr  = rho[solid_mask]
-
             if sd.max() > crust_z.max():
                 crust_vp_all.append(np.interp(crust_z, sd, svp))
                 crust_vs_all.append(np.interp(crust_z, sd, svs))
                 crust_rho_all.append(np.interp(crust_z, sd, sr))
-
             cd = depth[core_mask]; cvp = Vp[core_mask]; cr = rho[core_mask]
             if cd.max() >= core_z.max() * 0.9:
                 core_vp_all.append(np.interp(core_z, cd, cvp))
@@ -261,8 +222,7 @@ def compute_khan_median():
             continue
 
     cmb_median = float(np.median(cmb_depths))
-    print(f"  CMB depth {cmb_median:.0f} km")
-
+    print(f"  CMB 中位數深度：{cmb_median:.0f} km")
     _KHAN_CACHE = {
         'crust_z':   crust_z,
         'crust_vp':  np.nanmedian(crust_vp_all,  axis=0),
@@ -276,34 +236,29 @@ def compute_khan_median():
     }
     return _KHAN_CACHE
 
-# compute oxygen
+# ============================================================
+# 電荷平衡
+# ============================================================
 
 def composition_from_params(params):
     mgnum = params['Mg#']
-
-    Mg = mgnum * MGFE_TOTAL
-    Fe = (1.0 - mgnum) * MGFE_TOTAL
-
-    p = {
-        'Si': FIXED_PARAMS['Si'],
-        'Mg': Mg,
-        'Fe': Fe,
-        'Ca': FIXED_PARAMS['Ca'],
-        'Al': FIXED_PARAMS['Al'],
-        'Na': FIXED_PARAMS['Na'],
-        'Cr': FIXED_PARAMS['Cr'],
-        'T_lit': params['T_lit'],
-        'P_lit': params['P_lit'],
+    Mg    = mgnum * MGFE_TOTAL
+    Fe    = (1.0 - mgnum) * MGFE_TOTAL
+    return {
+        'Si': FIXED_PARAMS['Si'], 'Mg': Mg, 'Fe': Fe,
+        'Ca': FIXED_PARAMS['Ca'], 'Al': FIXED_PARAMS['Al'],
+        'Na': FIXED_PARAMS['Na'], 'Cr': FIXED_PARAMS['Cr'],
+        'T_lit': params['T_lit'], 'P_lit': params['P_lit'],
     }
-    return p
-
 
 def compute_oxygen(p):
     return (2.0 * p['Si'] + p['Mg'] + p['Fe'] + p['Ca'] +
             1.5 * p['Al'] + 0.5 * p.get('Na', FIXED_PARAMS['Na']) +
             1.5 * p.get('Cr', FIXED_PARAMS['Cr']))
 
-# HeFESTo Forward
+# ============================================================
+# HeFESTo
+# ============================================================
 
 CONTROL_PHASES = """\
 phase plg
@@ -435,13 +390,9 @@ phase fee
 fee
 """
 
-
-
 def make_control_lines(p, O, line1):
-    """產生 HeFESTo control 檔（共用部分）"""
     return [
-        line1,
-        "8,2,4,2", "oxides",
+        line1, "8,2,4,2", "oxides",
         f"Si      {p['Si']:.5f}     {p['Si']:.5f}    0",
         f"Mg      {p['Mg']:.5f}     {p['Mg']:.5f}    0",
         f"Fe      {p['Fe']:.5f}     {p['Fe']:.5f}    0",
@@ -453,141 +404,124 @@ def make_control_lines(p, O, line1):
         "1,1,1,1", PAR_DIR, "73", CONTROL_PHASES,
     ]
 
-
-def run_hefesto_single(run_dir, control_lines, ad_in_content=None):
-    """跑一次 HeFESTo，回傳 fort.56 路徑或 None"""
+def run_hefesto_single(run_dir, control_lines, ad_in_content=None, timeout=600):
     os.makedirs(run_dir, exist_ok=True)
-
     with open(os.path.join(run_dir, "control"), 'w') as f:
         f.write("\n".join(control_lines))
-
     if ad_in_content is not None:
         with open(os.path.join(run_dir, "ad.in"), 'w') as f:
             f.write(ad_in_content)
-
     main_dst = os.path.join(run_dir, "main")
     if not os.path.exists(main_dst):
         shutil.copy2(HEFESTO_MAIN, main_dst)
         os.chmod(main_dst, 0o755)
-
     log_path = os.path.join(run_dir, "hefesto.log")
     try:
         with open(log_path, 'w') as log:
             subprocess.run(["./main"], cwd=run_dir,
-                           stdout=log, stderr=log, timeout=3600)
+                           stdout=log, stderr=log, timeout=timeout)
     except (subprocess.TimeoutExpired, Exception):
         return None
-
     fort56 = os.path.join(run_dir, "fort.56")
     if not os.path.exists(fort56) or os.path.getsize(fort56) == 0:
         return None
     return fort56
 
 
-def read_entropy_at_P(fort56_path, target_P):
+def make_adiabatic_profile_from_fort56(fort56_path, P_lit, T_lit,
+                                        P_max=P_MAX_GPA, n_points=50):
     """
-    從 fort.56 讀出最接近 target_P 的 entropy [J/g/K]。
-    fort.56 欄位：P, Depth, T, rho, Vbulk, VS, VP, VS_att, VP_att,
-                  Enthalpy, Entropy, alpha, Cp, K_T, QS, QP, rho_q, phase
-    Entropy 是第 11 欄（index 10）
+    從 Step1 的 fort.56 讀出 K_S = rho * Vp²，
+    用 dT/dP = γ·T / K_S 積分絕熱梯度。
+    比 NPS ensemble 快很多，不需要額外跑 HeFESTo。
     """
     try:
         with open(fort56_path) as f:
-            f.readline()
-            cols = f.readline().split()
+            f.readline(); cols = f.readline().split()
         df = pd.read_csv(fort56_path, sep=r'\s+', skiprows=2, names=cols)
         if df.empty:
-            return None
-        P_col = df.columns[0]
-        S_col = df.columns[10]
-        idx   = (df[P_col] - target_P).abs().idxmin()
-        S     = float(df[S_col].iloc[idx])
-        T_val = float(df[df.columns[2]].iloc[idx])
-        print(f"    Step1: P={df[P_col].iloc[idx]:.3f} GPa, "
-              f"T={T_val:.1f} K, S={S:.5f} J/g/K")
-        return S
+            return None, None
+
+        P_col   = df.columns[0]   # P(GPa)
+        rho_col = df.columns[3]   # rho(g/cm^3)
+        Vp_col  = df.columns[6]   # VP(km/s)
+
+        idx    = (df[P_col] - P_lit).abs().idxmin()
+        rho_0  = float(df[rho_col].iloc[idx]) * 1000   # kg/m³
+        Vp_0   = float(df[Vp_col].iloc[idx])  * 1000   # m/s
+        K_S_0  = rho_0 * Vp_0**2 / 1e9                 # GPa
+
+        print(f"    K_S at P_lit: {K_S_0:.1f} GPa  "
+              f"→ dT/dP|adiab ≈ {GAMMA * T_lit / K_S_0:.1f} K/GPa")
+
     except Exception as e:
-        print(f"    read_entropy 失敗: {e}")
-        return None
+        print(f"    make_adiabatic_profile 失敗: {e}")
+        return None, None
+
+    # 積分
+    P_adiab = np.linspace(P_lit, P_max, n_points)
+    T_adiab = np.zeros(n_points)
+    T_adiab[0] = T_lit
+    for i in range(1, n_points):
+        dP = P_adiab[i] - P_adiab[i-1]
+        dTdP = GAMMA * T_adiab[i-1] / K_S_0   # 用 P_lit 處的 K_S 近似
+        T_adiab[i] = T_adiab[i-1] + dTdP * dP
+
+    return P_adiab, T_adiab
 
 
 def run_hefesto(params, run_dir):
     """
-    絕熱版 HeFESTo 正演：
-    Step1 (NPT): P_lit, T_lit → 取得 S_lit（entropy）
-    Step2 (NPS): 從 S_lit 沿 isentrope 積分到 P_MAX → 絕熱溫度剖面
-    Step3 (NPT with ad.in): 傳導段 + 絕熱段合併，跑最終計算
+    Step1 (NPT, P_lit, T_lit): 取得 K_S
+    用 K_S 積分絕熱溫度剖面
+    Step2 (NPT with ad.in): 用完整 T profile 跑最終計算
     """
     p = composition_from_params(params)
     O = compute_oxygen(p)
     T_lit = p['T_lit']
     P_lit = p['P_lit']
 
-    # ── Step 1: NPT 在 P_lit, T_lit 取得 S_lit ──
-    dir1     = os.path.join(run_dir, "s1_npt")
-    line1    = f"{P_lit:.4f},{P_lit:.4f},1,{T_lit:.2f},{T_lit:.2f},0,0,0,0"
+    # ── Step 1: NPT 在 P_lit, T_lit ──
+    dir1  = os.path.join(run_dir, "s1_npt")
+    line1 = f"{P_lit:.4f},{P_lit:.4f},1,{T_lit:.2f},{T_lit:.2f},0,0,0,0"
     fort56_1 = run_hefesto_single(dir1, make_control_lines(p, O, line1))
     if fort56_1 is None:
         print("    Step1 失敗")
         return None
 
-    S_lit = read_entropy_at_P(fort56_1, P_lit)
-    if S_lit is None:
+    # ── 從 fort.56 積分絕熱溫度 ──
+    P_adiab, T_adiab = make_adiabatic_profile_from_fort56(
+        fort56_1, P_lit, T_lit)
+    if P_adiab is None:
         return None
 
-    # ── Step 2: NPS isentrope 從 P_lit 到 P_MAX ──
-    dir2  = os.path.join(run_dir, "s2_nps")
-    line2 = (f"{P_lit:.4f},{P_MAX_GPA:.1f},20,"
-             f"{S_lit:.6f},{S_lit:.6f},0,-2,{T_lit:.2f},0")
-    fort56_2 = run_hefesto_single(dir2, make_control_lines(p, O, line2))
-    if fort56_2 is None:
-        print("    Step2 失敗")
-        return None
+    # ── 合併：傳導段 + 絕熱段 ──
+    P_cond = np.linspace(1.04, P_lit, 100)
+    T_cond = T_SURF + (T_lit - T_SURF) * (P_cond / P_lit)
 
-    # 讀取 Step2 的 T(P) 剖面
-    try:
-        with open(fort56_2) as f:
-            f.readline(); cols = f.readline().split()
-        df2    = pd.read_csv(fort56_2, sep=r'\s+', skiprows=2, names=cols)
-        P_adiab = df2[df2.columns[0]].values
-        T_adiab = df2[df2.columns[2]].values
-    except Exception as e:
-        print(f"    讀取 Step2 失敗: {e}")
-        return None
+    P_full = np.concatenate([P_cond, P_adiab])
+    T_full = np.concatenate([T_cond, T_adiab])
+    sort_idx        = np.argsort(P_full)
+    P_full, T_full  = P_full[sort_idx], T_full[sort_idx]
+    _, uniq         = np.unique(P_full, return_index=True)
+    P_full, T_full  = P_full[uniq], T_full[uniq]
 
-    # ── 合併：傳導段（地表→P_lit）+ 絕熱段（P_lit→P_MAX）──
-    # 傳導段：從 T_SURF（220K）線性升溫到 T_lit
-    n_cond  = 100
-    P_cond  = np.linspace(1.04, P_lit, n_cond)
-    T_cond  = T_SURF + (T_lit - T_SURF) * (P_cond / P_lit)
-
-    P_full  = np.concatenate([P_cond, P_adiab])
-    T_full  = np.concatenate([T_cond, T_adiab])
-
-    # 排序去重
-    sort_idx            = np.argsort(P_full)
-    P_full, T_full      = P_full[sort_idx], T_full[sort_idx]
-    _, uniq             = np.unique(P_full, return_index=True)
-    P_full, T_full      = P_full[uniq], T_full[uniq]
-
-    # ── Step 3: 用完整 T profile 跑最終計算 ──
-    dir3     = os.path.join(run_dir, "s3_final")
-    line3    = f"0,{P_MAX_GPA:.0f},50,0,0,0,-1,0,0"
-    ad_in    = "".join(f"{P:.6f} 0.000000 {T:.6f}\n"
-                       for P, T in zip(P_full, T_full))
-    fort56_3 = run_hefesto_single(dir3, make_control_lines(p, O, line3),
-                                  ad_in_content=ad_in)
-    return fort56_3
+    # ── Step 2 (原 Step3): 最終計算 ──
+    dir2  = os.path.join(run_dir, "s2_final")
+    line2 = f"0,{P_MAX_GPA:.0f},50,0,0,0,-1,0,0"
+    ad_in = "".join(f"{P:.6f} 0.000000 {T:.6f}\n"
+                    for P, T in zip(P_full, T_full))
+    return run_hefesto_single(dir2, make_control_lines(p, O, line2),
+                              ad_in_content=ad_in)
 
 # ============================================================
-# TauP 正演
+# TauP
 # ============================================================
 
 def read_fort56(fort56_path):
     try:
         with open(fort56_path) as f:
-            f.readline()
-            cols = f.readline().split()
+            f.readline(); cols = f.readline().split()
         if not cols:
             return None
         df = pd.read_csv(fort56_path, sep=r'\s+', skiprows=2, names=cols)
@@ -605,9 +539,9 @@ def read_fort56(fort56_path):
     rho_m = (rho[:-1] + rho[1:]) / 2
     depth = np.zeros(len(P_GPa))
     for i in range(len(dP)):
-        g_i      = gravity_mars(depth[i])          # m/s²
-        rho_si   = rho_m[i] * 1000                 # kg/m³
-        dz_i     = dP[i] / (rho_si * g_i) / 1000  # km
+        g_i      = gravity_mars(depth[i])
+        rho_si   = rho_m[i] * 1000
+        dz_i     = dP[i] / (rho_si * g_i) / 1000
         depth[i+1] = depth[i] + dz_i
 
     return {'depth_km': depth, 'Vp': Vp, 'Vs': Vs, 'rho': rho}
@@ -615,72 +549,57 @@ def read_fort56(fort56_path):
 
 def build_taup(fort56_data, model_name):
     os.makedirs(TAUP_WORK_DIR, exist_ok=True)
-
- 
     model_name = model_name.replace(".npz", "")
-
-    npz_path = os.path.join(TAUP_WORK_DIR, f'{model_name}.npz')
-    nd_path  = os.path.join(TAUP_WORK_DIR, f"{model_name}.nd")
-
+    npz_path   = os.path.join(TAUP_WORK_DIR, f'{model_name}.npz')
+    nd_path    = os.path.join(TAUP_WORK_DIR, f"{model_name}.nd")
     if os.path.exists(npz_path):
         return TauPyModel(model=npz_path)
 
     khan      = compute_khan_median()
     cmb_depth = khan['cmb_depth']
-
     hef_depth = fort56_data['depth_km']
     hef_Vp    = fort56_data['Vp']
     hef_Vs    = fort56_data['Vs']
     hef_rho   = fort56_data['rho']
 
     mantle_mask = (hef_depth >= 100.0) & (hef_depth <= cmb_depth)
-    man_depth = hef_depth[mantle_mask]
-    man_Vp    = hef_Vp[mantle_mask]
-    man_Vs    = hef_Vs[mantle_mask]
-    man_rho   = hef_rho[mantle_mask]
-
+    man_depth   = hef_depth[mantle_mask]
+    man_Vp      = hef_Vp[mantle_mask]
+    man_Vs      = hef_Vs[mantle_mask]
+    man_rho     = hef_rho[mantle_mask]
     if len(man_depth) == 0:
         raise ValueError("地幔深度範圍不足")
 
     with open(nd_path, 'w') as f:
         for d, vp, vs, r in zip(khan['crust_z'], khan['crust_vp'],
-                                  khan['crust_vs'], khan['crust_rho']):
+                                 khan['crust_vs'], khan['crust_rho']):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
-
         f.write("mantle\n")
-
         for d, vp, vs, r in zip(man_depth, man_Vp, man_Vs, man_rho):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
-
-        last_d = man_depth[-1]
-        last_vp = man_Vp[-1]
+        last_d   = man_depth[-1]
+        last_vp  = man_Vp[-1]
         last_rho = man_rho[-1]
-
         f.write(f"{last_d:.3f}  {last_vp:.4f}  0.0000  {last_rho:.4f}\n")
         f.write("outer-core\n")
-
         core_z   = khan['core_z']
         core_vp  = khan['core_vp']
         core_rho = khan['core_rho']
-
         mask     = core_z >= last_d
         core_z   = core_z[mask]
         core_vp  = core_vp[mask]
         core_rho = core_rho[mask]
-
         f.write(f"{last_d:.3f}  {core_vp[0]:.4f}  0.0000  {core_rho[0]:.4f}\n")
-
         for d, vp, r in zip(core_z[1:], core_vp[1:], core_rho[1:]):
             f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
 
     build_taup_model(nd_path, output_folder=TAUP_WORK_DIR)
-
     return TauPyModel(model=npz_path)
+
 
 def compute_misfit(taup_model, obs_dataset):
     total = 0.0; n = 0
     phases = ['P','S','pP','sP','PP','PPP','SS','SSS','sS','ScS','SKS']
-
     for event, obs in obs_dataset.items():
         delta = obs['delta']; depth = obs.get('depth', 10.0)
         try:
@@ -690,24 +609,20 @@ def compute_misfit(taup_model, obs_dataset):
                 phase_list=phases)
         except Exception:
             continue
-
         times = {}
         for a in arrivals:
             if a.name not in times:
                 times[a.name] = a.time
-
         def diff(a, b):
             return times[a] - times[b] if a in times and b in times else None
-
         pred = {
-            'S-P':    diff('S','P'),   'pP-P':  diff('pP','P'),
-            'sP-P':   diff('sP','P'),  'PP-P':  diff('PP','P'),
-            'PPP-P':  diff('PPP','P'), 'sS-S':  diff('sS','S'),
-            'SS-S':   diff('SS','S'),  'SSS-S': diff('SSS','S'),
-            'ScS-S':  diff('ScS','S'), 'SS-PP': diff('SS','PP'),
+            'S-P': diff('S','P'), 'pP-P': diff('pP','P'),
+            'sP-P': diff('sP','P'), 'PP-P': diff('PP','P'),
+            'PPP-P': diff('PPP','P'), 'sS-S': diff('sS','S'),
+            'SS-S': diff('SS','S'), 'SSS-S': diff('SSS','S'),
+            'ScS-S': diff('ScS','S'), 'SS-PP': diff('SS','PP'),
             'SKS-PP': diff('SKS','PP'),
         }
-
         for phase, obs_val in obs.items():
             if phase in ('delta','depth') or obs_val is None:
                 continue
@@ -716,42 +631,36 @@ def compute_misfit(taup_model, obs_dataset):
             if phase not in SIGMA:
                 continue
             total += abs(obs_val - pred[phase]) / SIGMA[phase]
-            n += 1
-
-    return total / n if n > 0 else 999.0, n
+            n     += 1
+    return (total / n if n > 0 else 999.0), n
 
 # ============================================================
-# 完整正演（HeFESTo + TauP + misfit）
+# 正演
 # ============================================================
 
 def forward(params, run_dir, model_name):
-    """給定參數，回傳 misfit/datum"""
     fort56 = run_hefesto(params, run_dir)
     if fort56 is None:
         return None, None
-
     fort56_data = read_fort56(fort56)
     if fort56_data is None:
-        shutil.rmtree(run_dir, ignore_errors=True)  # 清理
+        shutil.rmtree(run_dir, ignore_errors=True)
         return None, None
-
     try:
         taup_model = build_taup(fort56_data, model_name)
     except Exception as e:
         print(f"    TauP 失敗：{e}")
-        shutil.rmtree(run_dir, ignore_errors=True)  # 清理
+        shutil.rmtree(run_dir, ignore_errors=True)
         return None, None
-
     misfit, n_data = compute_misfit(taup_model, SAMUEL_DATA)
     shutil.rmtree(run_dir, ignore_errors=True)
     return misfit, n_data
 
 # ============================================================
-# MCMC Metropolis-Hastings
+# MCMC
 # ============================================================
 
 def propose(current, rng):
-    """提議新參數（Gaussian proposal，在 prior 範圍內）"""
     proposed = {}
     for key in PRIOR:
         lo, hi = PRIOR[key]
@@ -762,42 +671,33 @@ def propose(current, rng):
                 break
     return proposed
 
-def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
-    """
-    執行單條 MCMC chain
 
-    chain_id : int，chain 編號（0, 1, 2, ...）
-    n_steps  : int，總步數
-    """
+def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     chain_dir = os.path.join(MCMC_DIR, f"{prefix}_{chain_id:02d}")
     os.makedirs(chain_dir, exist_ok=True)
 
     load_gravity_profile()
     compute_khan_median()
 
-    rng = np.random.default_rng(42 + chain_id)
-
+    rng     = np.random.default_rng(42 + chain_id)
     current = start_params.copy() if start_params else START_PARAMS.copy()
 
-    # 如果有之前的 chain 記錄，從最後一步繼續
     chain_file = os.path.join(chain_dir, "chain.json")
-    chain = []
+    chain      = []
     if os.path.exists(chain_file):
         with open(chain_file) as f:
             chain = json.load(f)
         if chain:
             current = chain[-1]['params']
-            print(f"Chain {chain_id}, start from  {len(chain)} steps")
+            print(f"Chain {chain_id}：從第 {len(chain)} 步繼續")
 
-    step_start = len(chain)
+    step_start   = len(chain)
     accept_count = 0
 
-    print(f"\nChain {chain_id} begin")
-    print(f"  initial misfitstart")
-    print(f"  target steps {n_steps}")
+    print(f"\nChain {chain_id} 開始")
+    print(f"  目標步數：{n_steps}")
     print("=" * 60)
 
-    # 計算起始點的 misfit
     if chain:
         current_misfit = chain[-1]['misfit']
     else:
@@ -805,36 +705,27 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         model_name = f"mcmc_c{chain_id:02d}_current"
         current_misfit, _ = forward(current, run_dir, model_name)
         if current_misfit is None:
-            print("  start point HeFESTo fail, please change another start point")
+            print("  起始點 HeFESTo 失敗！")
             return
 
-    print(f"  initial misfit/datum = {current_misfit:.4f}")
+    print(f"  起始 misfit/datum = {current_misfit:.4f}")
 
-    # MCMC 主迴圈
     for step in range(step_start, step_start + n_steps):
         t0 = datetime.now()
-
-        # 提議新參數
-        proposed = propose(current, rng)
-
-        # 計算新 misfit
-        run_dir    = os.path.join(chain_dir, f"step_{step+1:05d}")
-        model_name = f"mcmc_c{chain_id:02d}_s{step+1:05d}"
+        proposed        = propose(current, rng)
+        run_dir         = os.path.join(chain_dir, f"step_{step+1:05d}")
+        model_name      = f"mcmc_c{chain_id:02d}_s{step+1:05d}"
         proposed_misfit, n_data = forward(proposed, run_dir, model_name)
 
         if proposed_misfit is None:
-            # HeFESTo 失敗 → reject
-            accepted = False
+            accepted        = False
             proposed_misfit = 999.0
         else:
-            # Metropolis acceptance criterion
-            # misfit 是 L1 norm，likelihood ∝ exp(-misfit)
             delta_misfit = proposed_misfit - current_misfit
-
             if delta_misfit <= 0:
                 accepted = True
             else:
-                log_alpha = -delta_misfit * n_data  # L1 norm likelihood
+                log_alpha = -delta_misfit * n_data
                 accepted  = np.log(rng.uniform()) < log_alpha
 
         if accepted:
@@ -842,39 +733,33 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             current_misfit = proposed_misfit
             accept_count  += 1
 
-        elapsed = (datetime.now() - t0).total_seconds()
+        elapsed     = (datetime.now() - t0).total_seconds()
         accept_rate = accept_count / (step - step_start + 1) * 100
 
         print(f"  Step {step+1:4d}: misfit={current_misfit:.4f}  "
               f"{'ACCEPT' if accepted else 'reject'}  "
-              f"accept_rate={accept_rate:.1f}%  "
-              f"({elapsed:.0f}s)")
+              f"rate={accept_rate:.1f}%  ({elapsed:.0f}s)")
 
-        # 記錄
-        record = {
-            'step':         step + 1,
-            'params':       current,
-            'misfit':       current_misfit,
-            'accepted':     bool(accepted),
-            'accept_rate':  accept_rate,
-        }
-        chain.append(record)
+        chain.append({
+            'step':        step + 1,
+            'params':      current,
+            'misfit':      current_misfit,
+            'accepted':    bool(accepted),
+            'accept_rate': accept_rate,
+        })
 
-        # 每 10 步存一次
         if (step + 1) % 10 == 0:
             with open(chain_file, 'w') as f:
                 json.dump(chain, f, indent=2)
-            print(f"  [save chain_{chain_id:02d}, in total  {len(chain)} ]")
+            print(f"  [儲存 {prefix}_{chain_id:02d}，共 {len(chain)} 步]")
 
-    # 最終儲存
     with open(chain_file, 'w') as f:
         json.dump(chain, f, indent=2)
 
-    total_steps = step_start + n_steps
-    print(f"\nChain {chain_id} finish!")
-    print(f"  total step:{total_steps}")
-    print(f"  final accept rate：{accept_count/(n_steps)*100:.1f}%")
-    print(f"  final misfit：{current_misfit:.4f}")
+    print(f"\nChain {chain_id} 完成！")
+    print(f"  總步數：{step_start + n_steps}")
+    print(f"  最終 accept rate：{accept_count/n_steps*100:.1f}%")
+    print(f"  最終 misfit：{current_misfit:.4f}")
 
 # ============================================================
 # 入口
@@ -882,14 +767,10 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--chain', type=int, default=0,
-                        help='Chain 編號（0, 1, 2, ...）')
-    parser.add_argument('--steps', type=int, default=100,
-                        help='step（預設 100）')
-    parser.add_argument('--test', action='store_true',
-                        help='只跑 1 步測試')
-    parser.add_argument('--prefix', type=str, default='chain',
-                    help='chain 資料夾前綴（預設 chain）')
+    parser.add_argument('--chain',  type=int,  default=0)
+    parser.add_argument('--steps',  type=int,  default=100)
+    parser.add_argument('--test',   action='store_true')
+    parser.add_argument('--prefix', type=str,  default='chain')
     args = parser.parse_args()
 
     os.makedirs(MCMC_DIR, exist_ok=True)

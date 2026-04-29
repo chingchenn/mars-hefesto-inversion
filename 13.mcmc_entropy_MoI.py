@@ -17,13 +17,13 @@ from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
 
 # ============================================================
-# 常數
+# Constants
 # ============================================================
 
 MARS_RADIUS = 3389.5
 T_SURF      = 220.0
 P_MAX_GPA   = 22.0
-GAMMA       = 1.1    # Grüneisen parameter（火星地幔平均值）
+GAMMA       = 1.1    # Grüneisen parameter (Mars mantle average)
 MARS_MASS_OBS   = 6.4171e23
 MARS_MASS_SIGMA = MARS_MASS_OBS * 0.01
 MOI_OBS         = 0.3634
@@ -31,7 +31,7 @@ MOI_SIGMA       = 0.0006
 MARS_RADIUS_M   = MARS_RADIUS * 1000  # 3389500 m
 
 # ============================================================
-# 重力剖面
+# Gravity Profile
 # ============================================================
 
 _GRAVITY_DEPTH = None
@@ -48,7 +48,7 @@ def load_gravity_profile():
         rho_all = data[:, 0]
         r_all   = data[:, 1]
     except Exception as e:
-        print(f"警告：無法讀取 rho_profile.dat ({e})，使用固定 g=3.45")
+        print(f"Warning: cannot read rho_profile.dat ({e}), using fixed g=3.45")
         _GRAVITY_DEPTH = np.array([0.0, 1600.0])
         _GRAVITY_G     = np.array([3.45, 3.45])
         return
@@ -72,7 +72,7 @@ def load_gravity_profile():
     sort_idx       = np.argsort(depth_km)
     _GRAVITY_DEPTH = depth_km[sort_idx]
     _GRAVITY_G     = g[sort_idx]
-    print(f"  重力剖面載入：地表 {_GRAVITY_G[0]:.3f} m/s²，"
+    print(f"  Gravity profile loaded: surface {_GRAVITY_G[0]:.3f} m/s², "
           f"CMB (~1533 km) {np.interp(1533, _GRAVITY_DEPTH, _GRAVITY_G):.3f} m/s²")
 
 
@@ -178,7 +178,7 @@ SAMUEL_DATA = {
 }
 
 # ============================================================
-# Khan 中位數
+# Khan Median
 # ============================================================
 
 _KHAN_CACHE = None
@@ -189,7 +189,7 @@ def compute_khan_median():
         return _KHAN_CACHE
 
     files = sorted(glob.glob(os.path.join(KHAN_MODEL_DIR, 'Model_*.txt')))
-    print(f"讀取 {len(files)} 個 Khan models...")
+    print(f"Reading {len(files)} Khan models...")
 
     crust_z = np.linspace(0, 100, 200)
     core_z  = np.linspace(1500, MARS_RADIUS, 200)
@@ -222,7 +222,7 @@ def compute_khan_median():
             continue
 
     cmb_median = float(np.median(cmb_depths))
-    print(f"  CMB 中位數深度：{cmb_median:.0f} km")
+    print(f"  CMB median depth: {cmb_median:.0f} km")
     _KHAN_CACHE = {
         'crust_z':   crust_z,
         'crust_vp':  np.nanmedian(crust_vp_all,  axis=0),
@@ -237,7 +237,7 @@ def compute_khan_median():
     return _KHAN_CACHE
 
 # ============================================================
-# 電荷平衡
+# Charge Balance
 # ============================================================
 
 def composition_from_params(params):
@@ -431,9 +431,9 @@ def run_hefesto_single(run_dir, control_lines, ad_in_content=None, timeout=600):
 def make_adiabatic_profile_from_fort56(fort56_path, P_lit, T_lit,
                                         P_max=P_MAX_GPA, n_points=50):
     """
-    從 Step1 的 fort.56 讀出 K_S = rho * Vp²，
-    用 dT/dP = γ·T / K_S 積分絕熱梯度。
-    比 NPS ensemble 快很多，不需要額外跑 HeFESTo。
+    Read K_S = rho * Vp² from Step1 fort.56,
+    integrate adiabatic gradient with dT/dP = γ·T / K_S.
+    Much faster than NPS ensemble; no additional HeFESTo run needed.
     """
     try:
         with open(fort56_path) as f:
@@ -455,16 +455,16 @@ def make_adiabatic_profile_from_fort56(fort56_path, P_lit, T_lit,
               f"→ dT/dP|adiab ≈ {GAMMA * T_lit / K_S_0:.1f} K/GPa")
 
     except Exception as e:
-        print(f"    make_adiabatic_profile 失敗: {e}")
+        print(f"    make_adiabatic_profile failed: {e}")
         return None, None
 
-    # 積分
+    # Integration
     P_adiab = np.linspace(P_lit, P_max, n_points)
     T_adiab = np.zeros(n_points)
     T_adiab[0] = T_lit
     for i in range(1, n_points):
         dP = P_adiab[i] - P_adiab[i-1]
-        dTdP = GAMMA * T_adiab[i-1] / K_S_0   # 用 P_lit 處的 K_S 近似
+        dTdP = GAMMA * T_adiab[i-1] / K_S_0   # approximate using K_S at P_lit
         T_adiab[i] = T_adiab[i-1] + dTdP * dP
 
     return P_adiab, T_adiab
@@ -472,30 +472,30 @@ def make_adiabatic_profile_from_fort56(fort56_path, P_lit, T_lit,
 
 def run_hefesto(params, run_dir):
     """
-    Step1 (NPT, P_lit, T_lit): 取得 K_S
-    用 K_S 積分絕熱溫度剖面
-    Step2 (NPT with ad.in): 用完整 T profile 跑最終計算
+    Step1 (NPT, P_lit, T_lit): obtain K_S
+    Integrate adiabatic temperature profile from K_S
+    Step2 (NPT with ad.in): run final calculation with full T profile
     """
     p = composition_from_params(params)
     O = compute_oxygen(p)
     T_lit = p['T_lit']
     P_lit = p['P_lit']
 
-    # ── Step 1: NPT 在 P_lit, T_lit ──
+    # ── Step 1: NPT at P_lit, T_lit ──
     dir1  = os.path.join(run_dir, "s1_npt")
     line1 = f"{P_lit:.4f},{P_lit:.4f},1,{T_lit:.2f},{T_lit:.2f},0,0,0,0"
     fort56_1 = run_hefesto_single(dir1, make_control_lines(p, O, line1))
     if fort56_1 is None:
-        print("    Step1 失敗")
+        print("    Step1 failed")
         return None
 
-    # ── 從 fort.56 積分絕熱溫度 ──
+    # ── Integrate adiabatic temperature from fort.56 ──
     P_adiab, T_adiab = make_adiabatic_profile_from_fort56(
         fort56_1, P_lit, T_lit)
     if P_adiab is None:
         return None
 
-    # ── 合併：傳導段 + 絕熱段 ──
+    # ── Merge: conductive segment + adiabatic segment ──
     P_cond = np.linspace(1.04, P_lit, 100)
     T_cond = T_SURF + (T_lit - T_SURF) * (P_cond / P_lit)
 
@@ -506,7 +506,7 @@ def run_hefesto(params, run_dir):
     _, uniq         = np.unique(P_full, return_index=True)
     P_full, T_full  = P_full[uniq], T_full[uniq]
 
-    # ── Step 2 (原 Step3): 最終計算 ──
+    # ── Step 2 (formerly Step3): final calculation ──
     dir2  = os.path.join(run_dir, "s2_final")
     line2 = f"0,{P_MAX_GPA:.0f},50,0,0,0,-1,0,0"
     ad_in = "".join(f"{P:.6f} 0.000000 {T:.6f}\n"
@@ -568,7 +568,7 @@ def build_taup(fort56_data, model_name, khan_cache):
     man_Vs      = hef_Vs[mantle_mask]
     man_rho     = hef_rho[mantle_mask]
     if len(man_depth) == 0:
-        raise ValueError("地幔深度範圍不足")
+        raise ValueError("Mantle depth range insufficient")
 
     with open(nd_path, 'w') as f:
         for d, vp, vs, r in zip(khan['crust_z'], khan['crust_vp'],
@@ -601,41 +601,41 @@ def build_taup(fort56_data, model_name, khan_cache):
 
 def compute_mass_and_moi(fort56_data, khan_cache):
     """
-    從 HeFESTo 地幔密度 + Khan 地殼/核密度
-    積分計算 Total Mass 和 I/MR²
+    Integrate Total Mass and I/MR² from
+    HeFESTo mantle density + Khan crust/core density.
     """
     R = MARS_RADIUS_M
     cmb_depth_km = khan_cache['cmb_depth']
 
-    # ── 地殼（Khan median, 0~100 km）──
-    crust_z   = khan_cache['crust_z']       # km, 從地表往下
+    # ── Crust (Khan median, 0~100 km) ──
+    crust_z   = khan_cache['crust_z']       # km, downward from surface
     crust_rho = khan_cache['crust_rho']     # g/cm³
     crust_mask = crust_z <= 100.0
-    crust_r   = (R - crust_z[crust_mask] * 1000)   # m，從球心算
+    crust_r   = (R - crust_z[crust_mask] * 1000)   # m, from planet center
     crust_rho_si = crust_rho[crust_mask] * 1000     # kg/m³
 
-    # ── 地幔（HeFESTo, 100 km ~ CMB）──
+    # ── Mantle (HeFESTo, 100 km ~ CMB) ──
     hef_depth = fort56_data['depth_km']
     hef_rho   = fort56_data['rho']
     mantle_mask = (hef_depth >= 100.0) & (hef_depth <= cmb_depth_km)
     man_r     = (R - hef_depth[mantle_mask] * 1000)
     man_rho_si = hef_rho[mantle_mask] * 1000
 
-    # ── 核（Khan median）──
-    core_z   = khan_cache['core_z']         # km，從地表往下
+    # ── Core (Khan median) ──
+    core_z   = khan_cache['core_z']         # km, downward from surface
     core_rho = khan_cache['core_rho']
     core_mask = core_z >= cmb_depth_km
     core_r   = (R - core_z[core_mask] * 1000)
     core_rho_si = core_rho[core_mask] * 1000
 
-    # ── 合併，從球心（r小）到地表（r大）排序 ──
+    # ── Merge, sort from center (small r) to surface (large r) ──
     all_r   = np.concatenate([core_r, man_r, crust_r])
     all_rho = np.concatenate([core_rho_si, man_rho_si, crust_rho_si])
     sort_idx = np.argsort(all_r)
     all_r   = all_r[sort_idx]
     all_rho = all_rho[sort_idx]
 
-    # ── 積分 ──
+    # ── Integration ──
     M   = 4 * np.pi * np.trapezoid(all_rho * all_r**2, all_r)
     I   = (8 * np.pi / 3) * np.trapezoid(all_rho * all_r**4, all_r)
     moi = I / (M * R**2)
@@ -693,7 +693,7 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, khan_cache):
 
     return (total / n if n > 0 else 999.0), n
 # ============================================================
-# 正演
+# Forward Model
 # ============================================================
 
 def forward(params, run_dir, model_name, khan_cache):
@@ -707,7 +707,7 @@ def forward(params, run_dir, model_name, khan_cache):
     try:
         taup_model = build_taup(fort56_data, model_name, khan_cache)
     except Exception as e:
-        print(f"    TauP 失敗：{e}")
+        print(f"    TauP failed: {e}")
         shutil.rmtree(run_dir, ignore_errors=True)
         return None, None
     misfit, n_data = compute_misfit(taup_model, SAMUEL_DATA, fort56_data, khan_cache)
@@ -747,13 +747,13 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             chain = json.load(f)
         if chain:
             current = chain[-1]['params']
-            print(f"Chain {chain_id}：從第 {len(chain)} 步繼續")
+            print(f"Chain {chain_id}: resuming from step {len(chain)}")
 
     step_start   = len(chain)
     accept_count = 0
 
-    print(f"\nChain {chain_id} 開始")
-    print(f"  目標步數：{n_steps}")
+    print(f"\nChain {chain_id} started")
+    print(f"  Target steps: {n_steps}")
     print("=" * 60)
 
     if chain:
@@ -763,10 +763,10 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         model_name = f"mcmc_c{chain_id:02d}_current"
         current_misfit, _ = forward(current, run_dir, model_name, khan_cache)
         if current_misfit is None:
-            print("  起始點 HeFESTo 失敗！")
+            print("  Starting point HeFESTo failed!")
             return
 
-    print(f"  起始 misfit/datum = {current_misfit:.4f}")
+    print(f"  Starting misfit/datum = {current_misfit:.4f}")
 
     for step in range(step_start, step_start + n_steps):
         t0 = datetime.now()
@@ -809,18 +809,18 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         if (step + 1) % 10 == 0:
             with open(chain_file, 'w') as f:
                 json.dump(chain, f, indent=2)
-            print(f"  [儲存 {prefix}_{chain_id:02d}，共 {len(chain)} 步]")
+            print(f"  [Saved {prefix}_{chain_id:02d}, total {len(chain)} steps]")
 
     with open(chain_file, 'w') as f:
         json.dump(chain, f, indent=2)
 
-    print(f"\nChain {chain_id} 完成！")
-    print(f"  總步數：{step_start + n_steps}")
-    print(f"  最終 accept rate：{accept_count/n_steps*100:.1f}%")
-    print(f"  最終 misfit：{current_misfit:.4f}")
+    print(f"\nChain {chain_id} complete!")
+    print(f"  Total steps: {step_start + n_steps}")
+    print(f"  Final accept rate: {accept_count/n_steps*100:.1f}%")
+    print(f"  Final misfit: {current_misfit:.4f}")
 
 # ============================================================
-# 入口
+# Entry Point
 # ============================================================
 
 if __name__ == "__main__":
@@ -830,51 +830,51 @@ if __name__ == "__main__":
     parser.add_argument('--test',       action='store_true')
     parser.add_argument('--prefix',     type=str,  default='chain')
     parser.add_argument('--verify_moi', action='store_true',
-                        help='測試 Mass 和 MoI 計算是否正確')
+                        help='Test whether Mass and MoI calculation is correct')
     args = parser.parse_args()
 
     os.makedirs(MCMC_DIR, exist_ok=True)
 
     if args.verify_moi:
         print("=" * 55)
-        print("驗證 Mass 和 MoI 計算")
+        print("Verifying Mass and MoI Calculation")
         print("=" * 55)
         load_gravity_profile()
         khan = compute_khan_median()
 
-        # 用 START_PARAMS 跑一次 HeFESTo
-        print(f"\n起始參數：{START_PARAMS}")
+        # Run HeFESTo once with START_PARAMS
+        print(f"\nStarting parameters: {START_PARAMS}")
         test_dir = os.path.join(MCMC_DIR, "verify_moi_test")
         fort56 = run_hefesto(START_PARAMS, test_dir)
 
         if fort56 is None:
-            print("HeFESTo 失敗，無法驗證")
+            print("HeFESTo failed, cannot verify")
         else:
             fort56_data = read_fort56(fort56)
             if fort56_data is None:
-                print("fort.56 讀取失敗")
+                print("fort.56 read failed")
             else:
                 M, moi = compute_mass_and_moi(fort56_data, khan)
-                print(f"\n結果：")
+                print(f"\nResults:")
                 print(f"  Mass = {M:.4e} kg")
                 print(f"  Mass obs = {MARS_MASS_OBS:.4e} kg")
-                print(f"  Mass 差異 = {abs(M - MARS_MASS_OBS)/MARS_MASS_OBS*100:.2f}%")
+                print(f"  Mass deviation = {abs(M - MARS_MASS_OBS)/MARS_MASS_OBS*100:.2f}%")
                 print(f"")
                 print(f"  MoI  = {moi:.5f}")
                 print(f"  MoI obs = {MOI_OBS:.5f}")
-                print(f"  MoI 差異 = {abs(moi - MOI_OBS):.5f}")
+                print(f"  MoI deviation = {abs(moi - MOI_OBS):.5f}")
                 print(f"")
                 if abs(moi - MOI_OBS) < 0.01:
-                    print("  ✓ MoI 在合理範圍內")
+                    print("  ✓ MoI within reasonable range")
                 else:
-                    print("  ✗ MoI 偏差過大，請檢查密度積分")
+                    print("  ✗ MoI deviation too large, check density integration")
                 if abs(M - MARS_MASS_OBS) / MARS_MASS_OBS < 0.05:
-                    print("  ✓ Mass 在合理範圍內")
+                    print("  ✓ Mass within reasonable range")
                 else:
-                    print("  ✗ Mass 偏差過大，請檢查密度積分")
+                    print("  ✗ Mass deviation too large, check density integration")
 
     elif args.test:
-        print("測試模式：跑 1 步")
+        print("Test mode: running 1 step")
         run_mcmc(chain_id=0, n_steps=1, prefix=args.prefix)
 
     else:

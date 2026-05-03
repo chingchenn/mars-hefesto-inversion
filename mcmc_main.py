@@ -17,21 +17,24 @@ from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
 
 # ============================================================
-# Constants
+# parameters
 # ============================================================
 
 MARS_RADIUS = 3389.5
 T_SURF      = 220.0
 P_MAX_GPA   = 22.0
-GAMMA       = 1.1    # Grüneisen parameter (Mars mantle average)
+GAMMA       = 1.1    # Grüneisen parameter (average of mars' mantle)
 MARS_MASS_OBS   = 6.4171e23
 MARS_MASS_SIGMA = MARS_MASS_OBS * 0.01
 MOI_OBS         = 0.3634
 MOI_SIGMA       = 0.0006
 MARS_RADIUS_M   = MARS_RADIUS * 1000  # 3389500 m
 
+P_BML_FIXED   = 19.0   # GPa
+BML_THICKNESS = 150    # km
+
 # ============================================================
-# Gravity Profile
+# gravity profiles
 # ============================================================
 
 _GRAVITY_DEPTH = None
@@ -48,7 +51,7 @@ def load_gravity_profile():
         rho_all = data[:, 0]
         r_all   = data[:, 1]
     except Exception as e:
-        print(f"Warning: cannot read rho_profile.dat ({e}), using fixed g=3.45")
+        print(f" no rho_profile.dat ({e}), used g=3.45")
         _GRAVITY_DEPTH = np.array([0.0, 1600.0])
         _GRAVITY_G     = np.array([3.45, 3.45])
         return
@@ -82,7 +85,7 @@ def gravity_mars(depth_km):
     return np.interp(depth_km, _GRAVITY_DEPTH, _GRAVITY_G)
 
 # ============================================================
-# compsition 
+# composition
 # ============================================================
 
 YM_BASE = {
@@ -92,9 +95,11 @@ YM_BASE = {
 MGFE_TOTAL = YM_BASE['Mg'] + YM_BASE['Fe']
 
 START_PARAMS = {
-    'T_lit': 1952.92,
-    'P_lit': 6.0755,
-    'Mg#':   YM_BASE['Mg'] / (YM_BASE['Mg'] + YM_BASE['Fe']),
+    'T_lit':   1952.92,
+    'P_lit':   6.0755,
+    'Mg#':     YM_BASE['Mg'] / (YM_BASE['Mg'] + YM_BASE['Fe']),
+    'T_bml':   2500.0,
+    'Mg#_bml': 0.7,
 }
 
 FIXED_PARAMS = {
@@ -106,12 +111,16 @@ PRIOR = {
     'T_lit': (1000.0, 2600.0),
     'P_lit': (1.5,    9.0),
     'Mg#':   (0.50,   0.86),
+    'T_bml':   (1800.0, 3500.0),  # BML
+    'Mg#_bml': (0.50,   0.80),    # BML
 }
 
 STEP = {
     'T_lit': 60.0,
     'P_lit': 0.3,
     'Mg#':   0.015,
+    'T_bml': 60.0,
+    'Mg#_bml': 0.015,
 }
 
 SIGMA = {
@@ -177,8 +186,17 @@ SAMUEL_DATA = {
                'S-P': 216.0, 'ScS-S': 258.0},
 }
 
+def solidus_duncan2018(P_GPa):
+    """Duncan et al. 2018 solidus"""
+    if P_GPa <= 10.0:
+        T_C = -4.877 * P_GPa**2 + 120.2 * P_GPa + 1088.0
+    elif P_GPa <= 23.0:
+        T_C = -1.323 * (P_GPa - 10.0)**2 + 38.18 * (P_GPa - 10.0) + 1802.0
+    else:
+        T_C = 77.75 * (P_GPa - 23.0) + 2075.0
+    return T_C + 273.15
 # ============================================================
-# Khan Median
+# Khan median
 # ============================================================
 
 _KHAN_CACHE = None
@@ -189,7 +207,7 @@ def compute_khan_median():
         return _KHAN_CACHE
 
     files = sorted(glob.glob(os.path.join(KHAN_MODEL_DIR, 'Model_*.txt')))
-    print(f"Reading {len(files)} Khan models...")
+    print(f"Loading {len(files)} Khan models...")
 
     crust_z = np.linspace(0, 100, 200)
     core_z  = np.linspace(1500, MARS_RADIUS, 200)
@@ -222,7 +240,7 @@ def compute_khan_median():
             continue
 
     cmb_median = float(np.median(cmb_depths))
-    print(f"  CMB median depth: {cmb_median:.0f} km")
+    print(f"  CMB median: {cmb_median:.0f} km")
     _KHAN_CACHE = {
         'crust_z':   crust_z,
         'crust_vp':  np.nanmedian(crust_vp_all,  axis=0),
@@ -237,7 +255,7 @@ def compute_khan_median():
     return _KHAN_CACHE
 
 # ============================================================
-# Charge Balance
+# compute oxygen
 # ============================================================
 
 def composition_from_params(params):
@@ -404,11 +422,11 @@ def make_control_lines(p, O, line1):
         "1,1,1,1", PAR_DIR, "73", CONTROL_PHASES,
     ]
 
-def run_hefesto_single(run_dir, control_lines, ad_in_content=None, timeout=600):
+def run_hefesto_single(run_dir, control_lines, ad_in_content=None, timeout=1600):
     os.makedirs(run_dir, exist_ok=True)
     with open(os.path.join(run_dir, "control"), 'w') as f:
         f.write("\n".join(control_lines))
-    if ad_in_content is not None:
+    if ad_in_content is not None:  # in step 2
         with open(os.path.join(run_dir, "ad.in"), 'w') as f:
             f.write(ad_in_content)
     main_dst = os.path.join(run_dir, "main")
@@ -431,9 +449,8 @@ def run_hefesto_single(run_dir, control_lines, ad_in_content=None, timeout=600):
 def make_adiabatic_profile_from_fort56(fort56_path, P_lit, T_lit,
                                         P_max=P_MAX_GPA, n_points=50):
     """
-    Read K_S = rho * Vp² from Step1 fort.56,
-    integrate adiabatic gradient with dT/dP = γ·T / K_S.
-    Much faster than NPS ensemble; no additional HeFESTo run needed.
+    Read fort.56 from Step 1, get K_S = rho * Vp²,
+    integrate adiabatic temperature via dT/dP = γ·T / K_S.
     """
     try:
         with open(fort56_path) as f:
@@ -452,19 +469,19 @@ def make_adiabatic_profile_from_fort56(fort56_path, P_lit, T_lit,
         K_S_0  = rho_0 * Vp_0**2 / 1e9                 # GPa
 
         print(f"    K_S at P_lit: {K_S_0:.1f} GPa  "
-              f"→ dT/dP|adiab ≈ {GAMMA * T_lit / K_S_0:.1f} K/GPa")
+              f"-> dT/dP|adiab ~= {GAMMA * T_lit / K_S_0:.1f} K/GPa")
 
     except Exception as e:
-        print(f"    make_adiabatic_profile failed: {e}")
+        print(f" FAIL  make_adiabatic_profile {e}")
         return None, None
 
-    # Integration
+    # integration
     P_adiab = np.linspace(P_lit, P_max, n_points)
     T_adiab = np.zeros(n_points)
     T_adiab[0] = T_lit
     for i in range(1, n_points):
         dP = P_adiab[i] - P_adiab[i-1]
-        dTdP = GAMMA * T_adiab[i-1] / K_S_0   # approximate using K_S at P_lit
+        dTdP = GAMMA * T_adiab[i-1] / K_S_0   # K_S at P_lit
         T_adiab[i] = T_adiab[i-1] + dTdP * dP
 
     return P_adiab, T_adiab
@@ -472,30 +489,30 @@ def make_adiabatic_profile_from_fort56(fort56_path, P_lit, T_lit,
 
 def run_hefesto(params, run_dir):
     """
-    Step1 (NPT, P_lit, T_lit): obtain K_S
+    Step 1 (NPT, P_lit, T_lit): obtain K_S
     Integrate adiabatic temperature profile from K_S
-    Step2 (NPT with ad.in): run final calculation with full T profile
+    Step 2 (NPT with ad.in): run final calculation with full T profile
     """
     p = composition_from_params(params)
     O = compute_oxygen(p)
     T_lit = p['T_lit']
     P_lit = p['P_lit']
 
-    # ── Step 1: NPT at P_lit, T_lit ──
+    # -- Step 1: NPT at P_lit, T_lit --
     dir1  = os.path.join(run_dir, "s1_npt")
     line1 = f"{P_lit:.4f},{P_lit:.4f},1,{T_lit:.2f},{T_lit:.2f},0,0,0,0"
     fort56_1 = run_hefesto_single(dir1, make_control_lines(p, O, line1))
     if fort56_1 is None:
-        print("    Step1 failed")
+        print("    Step 1 failed")
         return None
 
-    # ── Integrate adiabatic temperature from fort.56 ──
+    # -- Integrate adiabatic temperature from fort.56 --
     P_adiab, T_adiab = make_adiabatic_profile_from_fort56(
         fort56_1, P_lit, T_lit)
     if P_adiab is None:
         return None
 
-    # ── Merge: conductive segment + adiabatic segment ──
+    # -- Merge: conductive segment + adiabatic segment --
     P_cond = np.linspace(1.04, P_lit, 100)
     T_cond = T_SURF + (T_lit - T_SURF) * (P_cond / P_lit)
 
@@ -506,13 +523,39 @@ def run_hefesto(params, run_dir):
     _, uniq         = np.unique(P_full, return_index=True)
     P_full, T_full  = P_full[uniq], T_full[uniq]
 
-    # ── Step 2 (formerly Step3): final calculation ──
+    # -- Step 2 (formerly Step 3): final calculation --
     dir2  = os.path.join(run_dir, "s2_final")
     line2 = f"0,{P_MAX_GPA:.0f},50,0,0,0,-1,0,0"
     ad_in = "".join(f"{P:.6f} 0.000000 {T:.6f}\n"
                     for P, T in zip(P_full, T_full))
     return run_hefesto_single(dir2, make_control_lines(p, O, line2),
                               ad_in_content=ad_in)
+
+def run_hefesto_bml(params, run_dir,
+                    P_top, P_bottom, T_bml, n_points=20):
+    """
+    BML-specific: isothermal profile
+    P ranges from P_top to P_bottom
+    T is fixed at T_bml
+    """
+    p = composition_from_params(params)
+    O = compute_oxygen(p)
+
+    # ad.in: isothermal profile
+    P_range = np.linspace(P_top, P_bottom, n_points)
+    ad_in   = "".join(
+        f"{P:.6f} 0.000000 {T_bml:.6f}\n"
+        for P in P_range
+    )
+
+    dir_bml = os.path.join(run_dir, "bml")
+    line = f"{P_top:.4f},{P_bottom:.4f},{n_points},0,0,0,-1,0,0"
+
+    return run_hefesto_single(
+        dir_bml,
+        make_control_lines(p, O, line),
+        ad_in_content=ad_in
+    )
 
 # ============================================================
 # TauP
@@ -547,7 +590,7 @@ def read_fort56(fort56_path):
     return {'depth_km': depth, 'Vp': Vp, 'Vs': Vs, 'rho': rho}
 
 
-def build_taup(fort56_data, model_name, khan_cache):
+def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
     os.makedirs(TAUP_WORK_DIR, exist_ok=True)
     model_name = model_name.replace(".npz", "")
     npz_path   = os.path.join(TAUP_WORK_DIR, f'{model_name}.npz')
@@ -555,14 +598,21 @@ def build_taup(fort56_data, model_name, khan_cache):
     if os.path.exists(npz_path):
         return TauPyModel(model=npz_path)
 
-    khan      = khan_cache 
+    khan      = khan_cache
     cmb_depth = khan['cmb_depth']
+
+    # Mantle bottom: up to BML top if BML exists, otherwise up to CMB
+    if bml_data is not None:
+        mantle_bottom = cmb_depth - BML_THICKNESS
+    else:
+        mantle_bottom = cmb_depth
+
     hef_depth = fort56_data['depth_km']
     hef_Vp    = fort56_data['Vp']
     hef_Vs    = fort56_data['Vs']
     hef_rho   = fort56_data['rho']
 
-    mantle_mask = (hef_depth >= 100.0) & (hef_depth <= cmb_depth)
+    mantle_mask = (hef_depth >= 100.0) & (hef_depth <= mantle_bottom)
     man_depth   = hef_depth[mantle_mask]
     man_Vp      = hef_Vp[mantle_mask]
     man_Vs      = hef_Vs[mantle_mask]
@@ -571,82 +621,137 @@ def build_taup(fort56_data, model_name, khan_cache):
         raise ValueError("Mantle depth range insufficient")
 
     with open(nd_path, 'w') as f:
+        # crust
         for d, vp, vs, r in zip(khan['crust_z'], khan['crust_vp'],
                                  khan['crust_vs'], khan['crust_rho']):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
         f.write("mantle\n")
+
+        # mantle
         for d, vp, vs, r in zip(man_depth, man_Vp, man_Vs, man_rho):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
-        last_d   = man_depth[-1]
-        last_vp  = man_Vp[-1]
-        last_rho = man_rho[-1]
-        f.write(f"{last_d:.3f}  {last_vp:.4f}  0.0000  {last_rho:.4f}\n")
-        f.write("outer-core\n")
-        core_z   = khan['core_z']
-        core_vp  = khan['core_vp']
-        core_rho = khan['core_rho']
-        mask     = core_z >= last_d
-        core_z   = core_z[mask]
-        core_vp  = core_vp[mask]
-        core_rho = core_rho[mask]
-        f.write(f"{last_d:.3f}  {core_vp[0]:.4f}  0.0000  {core_rho[0]:.4f}\n")
-        for d, vp, r in zip(core_z[1:], core_vp[1:], core_rho[1:]):
-            f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
+
+        if bml_data is not None:
+            # solid-liquid interface (Vs -> 0 at mantle bottom)
+            f.write(f"{man_depth[-1]:.3f}  "
+                    f"{man_Vp[-1]:.4f}  0.0000  {man_rho[-1]:.4f}\n")
+            f.write("outer-core\n")
+
+            # BML layer (isothermal, Vs=0)
+            bml_depth = bml_data['depth_km']
+            bml_vp    = bml_data['Vp']
+            bml_rho   = bml_data['rho']
+            bml_mask  = (bml_depth >= mantle_bottom) & \
+                        (bml_depth <= cmb_depth)
+            for d, vp, r in zip(bml_depth[bml_mask],
+                                 bml_vp[bml_mask],
+                                 bml_rho[bml_mask]):
+                f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
+
+            # core
+            core_z   = khan['core_z']
+            core_vp  = khan['core_vp']
+            core_rho = khan['core_rho']
+            mask     = core_z >= cmb_depth
+            f.write(f"{cmb_depth:.3f}  "
+                    f"{core_vp[mask][0]:.4f}  0.0000  "
+                    f"{core_rho[mask][0]:.4f}\n")
+            for d, vp, r in zip(core_z[mask][1:],
+                                 core_vp[mask][1:],
+                                 core_rho[mask][1:]):
+                f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
+
+        else:
+            # original non-BML mode
+            f.write(f"{man_depth[-1]:.3f}  "
+                    f"{man_Vp[-1]:.4f}  0.0000  {man_rho[-1]:.4f}\n")
+            f.write("outer-core\n")
+            core_z   = khan['core_z']
+            core_vp  = khan['core_vp']
+            core_rho = khan['core_rho']
+            mask     = core_z >= man_depth[-1]
+            f.write(f"{man_depth[-1]:.3f}  "
+                    f"{core_vp[mask][0]:.4f}  0.0000  "
+                    f"{core_rho[mask][0]:.4f}\n")
+            for d, vp, r in zip(core_z[mask][1:],
+                                 core_vp[mask][1:],
+                                 core_rho[mask][1:]):
+                f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
 
     build_taup_model(nd_path, output_folder=TAUP_WORK_DIR)
     return TauPyModel(model=npz_path)
+
 # ============================================================
-# Moment of Interia
+# Moment of Inertia
 # ============================================================
 
-def compute_mass_and_moi(fort56_data, khan_cache):
-    """
-    Integrate Total Mass and I/MR² from
-    HeFESTo mantle density + Khan crust/core density.
-    """
+def compute_mass_and_moi(fort56_data, khan_cache, bml_data=None):
     R = MARS_RADIUS_M
     cmb_depth_km = khan_cache['cmb_depth']
 
-    # ── Crust (Khan median, 0~100 km) ──
-    crust_z   = khan_cache['crust_z']       # km, downward from surface
-    crust_rho = khan_cache['crust_rho']     # g/cm³
-    crust_mask = crust_z <= 100.0
-    crust_r   = (R - crust_z[crust_mask] * 1000)   # m, from planet center
-    crust_rho_si = crust_rho[crust_mask] * 1000     # kg/m³
+    # When BML is present, mantle extends only to BML top
+    if bml_data is not None:
+        mantle_bottom_km = cmb_depth_km - BML_THICKNESS
+    else:
+        mantle_bottom_km = cmb_depth_km
 
-    # ── Mantle (HeFESTo, 100 km ~ CMB) ──
-    hef_depth = fort56_data['depth_km']
-    hef_rho   = fort56_data['rho']
-    mantle_mask = (hef_depth >= 100.0) & (hef_depth <= cmb_depth_km)
-    man_r     = (R - hef_depth[mantle_mask] * 1000)
-    man_rho_si = hef_rho[mantle_mask] * 1000
+    # crust
+    crust_z      = khan_cache['crust_z']
+    crust_rho    = khan_cache['crust_rho']
+    crust_mask   = crust_z <= 100.0
+    crust_r      = (R - crust_z[crust_mask] * 1000)
+    crust_rho_si = crust_rho[crust_mask] * 1000
 
-    # ── Core (Khan median) ──
-    core_z   = khan_cache['core_z']         # km, downward from surface
-    core_rho = khan_cache['core_rho']
-    core_mask = core_z >= cmb_depth_km
-    core_r   = (R - core_z[core_mask] * 1000)
+    # mantle (to BML top or CMB)
+    hef_depth    = fort56_data['depth_km']
+    hef_rho      = fort56_data['rho']
+    mantle_mask  = (hef_depth >= 100.0) & (hef_depth <= mantle_bottom_km)
+    man_r        = (R - hef_depth[mantle_mask] * 1000)
+    man_rho_si   = hef_rho[mantle_mask] * 1000
+
+    # BML (if present)
+    if bml_data is not None:
+        bml_depth    = bml_data['depth_km']
+        bml_rho      = bml_data['rho']
+        bml_mask     = (bml_depth >= mantle_bottom_km) & \
+                       (bml_depth <= cmb_depth_km)
+        bml_r        = (R - bml_depth[bml_mask] * 1000)
+        bml_rho_si   = bml_rho[bml_mask] * 1000
+    else:
+        bml_r      = np.array([])
+        bml_rho_si = np.array([])
+
+    # core
+    core_z      = khan_cache['core_z']
+    core_rho    = khan_cache['core_rho']
+    core_mask   = core_z >= cmb_depth_km
+    core_r      = (R - core_z[core_mask] * 1000)
     core_rho_si = core_rho[core_mask] * 1000
 
-    # ── Merge, sort from center (small r) to surface (large r) ──
-    all_r   = np.concatenate([core_r, man_r, crust_r])
-    all_rho = np.concatenate([core_rho_si, man_rho_si, crust_rho_si])
+    # merge from center to surface
+    all_r   = np.concatenate([core_r, bml_r, man_r, crust_r])
+    all_rho = np.concatenate([core_rho_si, bml_rho_si,
+                               man_rho_si, crust_rho_si])
     sort_idx = np.argsort(all_r)
-    all_r   = all_r[sort_idx]
-    all_rho = all_rho[sort_idx]
+    all_r    = all_r[sort_idx]
+    all_rho  = all_rho[sort_idx]
 
-    # ── Integration ──
     M   = 4 * np.pi * np.trapezoid(all_rho * all_r**2, all_r)
     I   = (8 * np.pi / 3) * np.trapezoid(all_rho * all_r**4, all_r)
     moi = I / (M * R**2)
 
     return M, moi
 
-def compute_misfit(taup_model, obs_dataset, fort56_data, khan_cache):
-    total = 0.0; n = 0
+def compute_misfit(taup_model, obs_dataset, fort56_data,
+                   khan_cache, bml_data=None, params=None):
+
+    tt_total = 0.0
+    tt_n     = 0
     phases = ['P','S','pP','sP','PP','PPP','SS','SSS','sS','ScS','SKS']
+
     for event, obs in obs_dataset.items():
-        delta = obs['delta']; depth = obs.get('depth', 10.0)
+        delta = obs['delta']
+        depth = obs.get('depth', 10.0)
         try:
             arrivals = taup_model.get_travel_times(
                 source_depth_in_km=depth,
@@ -661,11 +766,11 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, khan_cache):
         def diff(a, b):
             return times[a] - times[b] if a in times and b in times else None
         pred = {
-            'S-P': diff('S','P'), 'pP-P': diff('pP','P'),
-            'sP-P': diff('sP','P'), 'PP-P': diff('PP','P'),
-            'PPP-P': diff('PPP','P'), 'sS-S': diff('sS','S'),
-            'SS-S': diff('SS','S'), 'SSS-S': diff('SSS','S'),
-            'ScS-S': diff('ScS','S'), 'SS-PP': diff('SS','PP'),
+            'S-P':    diff('S','P'),   'pP-P':  diff('pP','P'),
+            'sP-P':   diff('sP','P'),  'PP-P':  diff('PP','P'),
+            'PPP-P':  diff('PPP','P'), 'sS-S':  diff('sS','S'),
+            'SS-S':   diff('SS','S'),  'SSS-S': diff('SSS','S'),
+            'ScS-S':  diff('ScS','S'), 'SS-PP': diff('SS','PP'),
             'SKS-PP': diff('SKS','PP'),
         }
         for phase, obs_val in obs.items():
@@ -675,44 +780,104 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, khan_cache):
                 continue
             if phase not in SIGMA:
                 continue
-            total += abs(obs_val - pred[phase]) / SIGMA[phase]
-            n     += 1
-    M_pred, moi_pred = compute_mass_and_moi(fort56_data, khan_cache)
+            tt_total += abs(obs_val - pred[phase]) / SIGMA[phase]
+            tt_n     += 1
 
+    tt_misfit = tt_total / tt_n if tt_n > 0 else 999.0
+
+    M_pred, moi_pred = compute_mass_and_moi(fort56_data, khan_cache,
+                                             bml_data=bml_data)
     mass_misfit = abs(MARS_MASS_OBS - M_pred) / MARS_MASS_SIGMA
-    moi_misfit  = abs(MOI_OBS - moi_pred) / MOI_SIGMA
+    moi_misfit  = abs(MOI_OBS - moi_pred)     / MOI_SIGMA
 
-    total += mass_misfit
-    total += moi_misfit
-    n     += 2
+    solidus_penalty = 0.0
+    if params is not None:
+        P_mantle = fort56_data['depth_km'] * 0.03  
+        T_mantle_profile = fort56_data.get('T_profile', None)
+        if bml_data is not None and params is not None:
+            T_bml = params['T_bml']
+            T_sol = solidus_duncan2018(P_BML_FIXED)
+            if T_bml < T_sol:
+                solidus_penalty = (T_sol - T_bml) / 100.0
+                print(f"    Solidus penalty = {solidus_penalty:.4f} "
+                    f"(T_bml={T_bml:.0f}K < T_sol={T_sol:.0f}K)")
 
-    print(f"    Mass={M_pred:.4e} kg (obs={MARS_MASS_OBS:.4e}), "
-          f"misfit={mass_misfit:.3f}")
-    print(f"    MoI={moi_pred:.4f} (obs={MOI_OBS:.4f}), "
-          f"misfit={moi_misfit:.3f}")
+    total_n      = tt_n + 2
+    total_misfit = (tt_total + mass_misfit + moi_misfit+ solidus_penalty) / total_n
 
-    return (total / n if n > 0 else 999.0), n
+    print(f"    TT misfit   = {tt_misfit:.4f}  (n={tt_n})")
+    print(f"    Mass misfit = {mass_misfit:.4f}  "
+          f"(pred={M_pred:.4e}, obs={MARS_MASS_OBS:.4e})")
+    print(f"    MoI  misfit = {moi_misfit:.4f}  "
+          f"(pred={moi_pred:.5f}, obs={MOI_OBS:.5f})")
+    print(f"    Total misfit= {total_misfit:.4f}  (n={total_n})")
+
+    # return misfit components
+    components = {
+        'tt':   tt_misfit,
+        'mass': mass_misfit,
+        'moi':  moi_misfit,
+    }
+    return total_misfit, total_n, components
+
 # ============================================================
-# Forward Model
+# forward model
 # ============================================================
 
 def forward(params, run_dir, model_name, khan_cache):
+
     fort56 = run_hefesto(params, run_dir)
     if fort56 is None:
-        return None, None
+        return None, None, None
     fort56_data = read_fort56(fort56)
     if fort56_data is None:
         shutil.rmtree(run_dir, ignore_errors=True)
-        return None, None
+        return None, None, None
+
+    cmb_depth    = khan_cache['cmb_depth']
+    P_bml_bottom = P_BML_FIXED
+    P_bml_top    = P_bml_bottom - 1.95
+
+    fort56_bml_path = run_hefesto_bml(
+        params   = {'T_lit': params['T_bml'],
+                    'P_lit': P_bml_top,
+                    'Mg#':   params['Mg#_bml']},
+        run_dir  = run_dir,
+        P_top    = P_bml_top,
+        P_bottom = P_bml_bottom,
+        T_bml    = params['T_bml'],
+    )
+
+    bml_data = None
+    if fort56_bml_path is not None:
+        bml_raw = read_fort56(fort56_bml_path)
+        if bml_raw is not None:
+            bml_top_km = cmb_depth - BML_THICKNESS
+            bml_raw['depth_km'] = bml_raw['depth_km'] + bml_top_km
+            rho_mantle_bottom = float(fort56_data['rho'][-1])
+            rho_bml_top       = float(bml_raw['rho'][0])
+            if rho_bml_top > rho_mantle_bottom:
+                bml_data = bml_raw
+            else:
+                print(f"    BML unstable : rho_bml={rho_bml_top:.3f} "
+                      f"< rho_mantle={rho_mantle_bottom:.3f}, refuse")
+                shutil.rmtree(run_dir, ignore_errors=True)
+                return 999.0, 1, {'tt': 999.0, 'mass': 999.0, 'moi': 999.0}
+
     try:
-        taup_model = build_taup(fort56_data, model_name, khan_cache)
+        taup_model = build_taup(fort56_data, model_name,
+                                khan_cache, bml_data=bml_data)
     except Exception as e:
         print(f"    TauP failed: {e}")
         shutil.rmtree(run_dir, ignore_errors=True)
-        return None, None
-    misfit, n_data = compute_misfit(taup_model, SAMUEL_DATA, fort56_data, khan_cache)
+        return None, None, None
+
+    misfit, n_data, components = compute_misfit(
+        taup_model, SAMUEL_DATA, fort56_data, khan_cache,
+        bml_data=bml_data, params=params)
+
     shutil.rmtree(run_dir, ignore_errors=True)
-    return misfit, n_data
+    return misfit, n_data, components
 
 # ============================================================
 # MCMC
@@ -752,7 +917,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     step_start   = len(chain)
     accept_count = 0
 
-    print(f"\nChain {chain_id} started")
+    print(f"\nChain {chain_id} starting")
     print(f"  Target steps: {n_steps}")
     print("=" * 60)
 
@@ -761,23 +926,26 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     else:
         run_dir    = os.path.join(chain_dir, "step_current")
         model_name = f"mcmc_c{chain_id:02d}_current"
-        current_misfit, _ = forward(current, run_dir, model_name, khan_cache)
+        current_misfit, _, _ = forward(current, run_dir, model_name, khan_cache)
         if current_misfit is None:
             print("  Starting point HeFESTo failed!")
             return
 
-    print(f"  Starting misfit/datum = {current_misfit:.4f}")
+    print(f"  Initial misfit/datum = {current_misfit:.4f}")
 
     for step in range(step_start, step_start + n_steps):
         t0 = datetime.now()
-        proposed        = propose(current, rng)
-        run_dir         = os.path.join(chain_dir, f"step_{step+1:05d}")
-        model_name      = f"mcmc_c{chain_id:02d}_s{step+1:05d}"
-        proposed_misfit, n_data = forward(proposed, run_dir, model_name, khan_cache)
+        proposed   = propose(current, rng)
+        run_dir    = os.path.join(chain_dir, f"step_{step+1:05d}")
+        model_name = f"mcmc_c{chain_id:02d}_s{step+1:05d}"
+
+        proposed_misfit, n_data, components = forward(
+            proposed, run_dir, model_name, khan_cache)
 
         if proposed_misfit is None:
             accepted        = False
             proposed_misfit = 999.0
+            components      = {'tt': 999.0, 'mass': 999.0, 'moi': 999.0}
         else:
             delta_misfit = proposed_misfit - current_misfit
             if delta_misfit <= 0:
@@ -802,6 +970,9 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             'step':        step + 1,
             'params':      current,
             'misfit':      current_misfit,
+            'misfit_tt':   components['tt'],
+            'misfit_mass': components['mass'],
+            'misfit_moi':  components['moi'],
             'accepted':    bool(accepted),
             'accept_rate': accept_rate,
         })
@@ -820,7 +991,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     print(f"  Final misfit: {current_misfit:.4f}")
 
 # ============================================================
-# Entry Point
+# entry point
 # ============================================================
 
 if __name__ == "__main__":
@@ -829,51 +1000,11 @@ if __name__ == "__main__":
     parser.add_argument('--steps',      type=int,  default=100)
     parser.add_argument('--test',       action='store_true')
     parser.add_argument('--prefix',     type=str,  default='chain')
-    parser.add_argument('--verify_moi', action='store_true',
-                        help='Test whether Mass and MoI calculation is correct')
     args = parser.parse_args()
 
     os.makedirs(MCMC_DIR, exist_ok=True)
 
-    if args.verify_moi:
-        print("=" * 55)
-        print("Verifying Mass and MoI Calculation")
-        print("=" * 55)
-        load_gravity_profile()
-        khan = compute_khan_median()
-
-        # Run HeFESTo once with START_PARAMS
-        print(f"\nStarting parameters: {START_PARAMS}")
-        test_dir = os.path.join(MCMC_DIR, "verify_moi_test")
-        fort56 = run_hefesto(START_PARAMS, test_dir)
-
-        if fort56 is None:
-            print("HeFESTo failed, cannot verify")
-        else:
-            fort56_data = read_fort56(fort56)
-            if fort56_data is None:
-                print("fort.56 read failed")
-            else:
-                M, moi = compute_mass_and_moi(fort56_data, khan)
-                print(f"\nResults:")
-                print(f"  Mass = {M:.4e} kg")
-                print(f"  Mass obs = {MARS_MASS_OBS:.4e} kg")
-                print(f"  Mass deviation = {abs(M - MARS_MASS_OBS)/MARS_MASS_OBS*100:.2f}%")
-                print(f"")
-                print(f"  MoI  = {moi:.5f}")
-                print(f"  MoI obs = {MOI_OBS:.5f}")
-                print(f"  MoI deviation = {abs(moi - MOI_OBS):.5f}")
-                print(f"")
-                if abs(moi - MOI_OBS) < 0.01:
-                    print("  ✓ MoI within reasonable range")
-                else:
-                    print("  ✗ MoI deviation too large, check density integration")
-                if abs(M - MARS_MASS_OBS) / MARS_MASS_OBS < 0.05:
-                    print("  ✓ Mass within reasonable range")
-                else:
-                    print("  ✗ Mass deviation too large, check density integration")
-
-    elif args.test:
+    if args.test:
         print("Test mode: running 1 step")
         run_mcmc(chain_id=0, n_steps=1, prefix=args.prefix)
 

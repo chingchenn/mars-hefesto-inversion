@@ -1,15 +1,12 @@
 """
-13_mcmc_4p_v6.py
+21_mcmc_NPS_clean.py
 
 主要更新：
 1. run_hefesto() 改為三步驟
    Step 1: NPT @ (P_lit, T_lit)  → 讀 S_lit
-   Step 2: NPS @ S_lit           → HeFESTo 自己積分絕熱 T(P)
+   Step 2: NPT scan（6個壓力點，各跑兩個NPT插值找S=S_lit的T）→ 建絕熱T(P)
    Step 3: iensem=-1 with ad.in  → 完整 Vp/Vs/rho
-2. read_fort56 → read_fort56_full，多回傳 T(K), S, P_GPa
-3. T_profile 存進 fort56_data['T_profile'], fort56_data['P_profile']
-4. 每步保留 fort.56 和 ad.in，刪掉其他檔案（不再整個 rmtree）
-5. solidus penalty 改用完整 T_profile 逐點比較
+2. 移除舊版 NPS 分段邏輯殘留（data_seg, seg_ok, P_adiab_segs）
 """
 
 import os
@@ -32,7 +29,7 @@ from obspy.taup.taup_create import build_taup_model
 
 MARS_RADIUS = 3389.5
 T_SURF      = 220.0
-P_MAX_GPA   = 22.0
+P_MAX_GPA   = 19.0
 GAMMA       = 1.1
 MARS_MASS_OBS   = 6.4171e23
 MARS_MASS_SIGMA = MARS_MASS_OBS * 0.01
@@ -40,10 +37,11 @@ MOI_OBS         = 0.3634
 MOI_SIGMA       = 0.0006
 MARS_RADIUS_M   = MARS_RADIUS * 1000
 
-P_BML_TOP     = 19.0   # GPa  ← BML頂部（地幔/BML界面）
-P_BML_BOTTOM  = 21.0   # GPa  ← BML底部（真正的CMB）
-BML_THICKNESS = 150    # km
-MCMC_TEMPERATURE = 1.0 
+P_BML_TOP     = 19.0
+P_BML_BOTTOM  = 21.0
+BML_THICKNESS = 150
+MCMC_TEMPERATURE = 1.0
+
 # ============================================================
 # gravity profiles
 # ============================================================
@@ -119,18 +117,18 @@ FIXED_PARAMS = {
 }
 
 PRIOR = {
-    'T_lit': (1000.0, 2600.0),
-    'P_lit': (1.5,    9.0),
-    'Mg#':   (0.50,   0.86),
+    'T_lit':   (1000.0, 2600.0),
+    'P_lit':   (1.5,    9.0),
+    'Mg#':     (0.50,   0.86),
     'T_bml':   (1800.0, 3500.0),
     'Mg#_bml': (0.50,   0.80),
 }
 
 STEP = {
-    'T_lit': 60.0,
-    'P_lit': 0.3,
-    'Mg#':   0.015,
-    'T_bml': 60.0,
+    'T_lit':   60.0,
+    'P_lit':   0.3,
+    'Mg#':     0.015,
+    'T_bml':   60.0,
     'Mg#_bml': 0.015,
 }
 
@@ -140,113 +138,111 @@ SIGMA = {
     'SS-PP': 10.0, 'SKS-PP': 10.0,
 }
 
-import numpy as np
 
 def s(a, sa, b, sb):
-    """差值的 uncertainty propagation"""
     return np.sqrt(sa**2 + sb**2)
 
 KHAN_DATA = {
     'S0167b': {
-        'delta': 72.5, 'depth': 31.2,          # italic → fixed depth
+        'delta': 72.5, 'depth': 31.2,
         'PP-P':  (37.0,  3.0),
         'S-P':   (414.5, 2.0),
-        'SSS-S': (468.0 - 414.5, s(3,0, 2,0)), # = 53.5 ± 3.6
+        'SSS-S': (468.0 - 414.5, s(3,0, 2,0)),
     },
     'S0173a': {
         'delta': 30.6, 'depth': 28.7,
         'pP-P':  (11.1,  3.0),
         'S-P':   (174.8, 2.0),
-        'sS-S':  (184.8 - 174.8, s(3,0, 2,0)), # = 10.0 ± 3.6
-        'SS-S':  (197.9 - 174.8, s(2,0, 2,0)), # = 23.1 ± 2.8
-        'ScS-S': (515.0 - 174.8, s(5,0, 2,0)), # = 340.2 ± 5.4
+        'sS-S':  (184.8 - 174.8, s(3,0, 2,0)),
+        'SS-S':  (197.9 - 174.8, s(2,0, 2,0)),
+        'ScS-S': (515.0 - 174.8, s(5,0, 2,0)),
     },
     'S0183a': {
-        'delta': 47.9, 'depth': 31.2,          # italic
+        'delta': 47.9, 'depth': 31.2,
         'PP-P':  (24.5, 4.0),
         'PPP-P': (43.0, 7.0),
     },
     'S0185a': {
         'delta': 63.1, 'depth': 34.2,
         'S-P':   (360.2, 2.0),
-        'sS-S':  (379.5 - 360.2, s(4,0, 2,0)), # = 19.3 ± 4.5
-        'SSS-S': (412.5 - 360.2, s(6,0, 2,0)), # = 52.3 ± 6.3
+        'sS-S':  (379.5 - 360.2, s(4,0, 2,0)),
+        'SSS-S': (412.5 - 360.2, s(6,0, 2,0)),
     },
     'S0235b': {
         'delta': 29.6, 'depth': 27.4,
         'PP-P':  (17.4,  2.0),
         'PPP-P': (31.1,  7.0),
         'S-P':   (166.0, 3.0),
-        'sS-S':  (178.7 - 166.0, s(3,0, 3,0)), # = 12.7 ± 4.2
-        'SS-S':  (193.1 - 166.0, s(3,0, 3,0)), # = 27.1 ± 4.2
-        'ScS-S': (512.0 - 166.0, s(8,0, 3,0)), # = 346.0 ± 8.5
+        'sS-S':  (178.7 - 166.0, s(3,0, 3,0)),
+        'SS-S':  (193.1 - 166.0, s(3,0, 3,0)),
+        'ScS-S': (512.0 - 166.0, s(8,0, 3,0)),
     },
     'S0325a': {
         'delta': 42.4, 'depth': 33.1,
         'pP-P':  (11.3,  3.0),
         'S-P':   (230.7, 3.0),
-        'SS-S':  (260.7 - 230.7, s(4,0, 3,0)), # = 30.0 ± 5.0
-        'SSS-S': (281.0 - 230.7, s(6,0, 3,0)), # = 50.3 ± 6.7
+        'SS-S':  (260.7 - 230.7, s(4,0, 3,0)),
+        'SSS-S': (281.0 - 230.7, s(6,0, 3,0)),
     },
     'S0407a': {
         'delta': 30.3, 'depth': 32.0,
         'PP-P':  (17.8,  5.0),
         'PPP-P': (33.0,  7.0),
         'S-P':   (172.2, 2.0),
-        'sS-S':  (183.4 - 172.2, s(3,0, 2,0)), # = 11.2 ± 3.6
-        'SS-S':  (196.4 - 172.2, s(5,0, 2,0)), # = 24.2 ± 5.4
+        'sS-S':  (183.4 - 172.2, s(3,0, 2,0)),
+        'SS-S':  (196.4 - 172.2, s(5,0, 2,0)),
     },
     'S0409d': {
-        'delta': 29.8, 'depth': 31.2,          # italic
+        'delta': 29.8, 'depth': 31.2,
         'S-P':   (162.5, 3.0),
-        'SS-S':  (184.9 - 162.5, s(4,0, 3,0)), # = 22.4 ± 5.0
-        'SSS-S': (207.7 - 162.5, s(6,0, 3,0)), # = 45.2 ± 6.7
+        'SS-S':  (184.9 - 162.5, s(4,0, 3,0)),
+        'SSS-S': (207.7 - 162.5, s(6,0, 3,0)),
     },
     'S0484b': {
         'delta': 30.7, 'depth': 33.5,
         'PP-P':  (18.1,  5.0),
         'S-P':   (170.2, 1.0),
-        'sS-S':  (184.0 - 170.2, s(3,0, 1,0)), # = 13.8 ± 3.2
-        'SS-S':  (196.8 - 170.2, s(3,0, 1,0)), # = 26.6 ± 3.2
+        'sS-S':  (184.0 - 170.2, s(3,0, 1,0)),
+        'SS-S':  (196.8 - 170.2, s(3,0, 1,0)),
     },
     'S0784a': {
         'delta': 31.1, 'depth': 30.6,
         'PP-P':  (15.2,  4.0),
         'PPP-P': (29.5,  7.0),
         'S-P':   (173.0, 4.0),
-        'sS-S':  (182.2 - 173.0, s(4,0, 4,0)), # = 9.2 ± 5.7
-        'SS-S':  (196.9 - 173.0, s(5,0, 4,0)), # = 23.9 ± 6.4
-        'SSS-S': (221.9 - 173.0, s(6,0, 4,0)), # = 48.9 ± 7.2
+        'sS-S':  (182.2 - 173.0, s(4,0, 4,0)),
+        'SS-S':  (196.9 - 173.0, s(5,0, 4,0)),
+        'SSS-S': (221.9 - 173.0, s(6,0, 4,0)),
     },
     'S0802a': {
-        'delta': 31.9, 'depth': 31.2,          # italic
+        'delta': 31.9, 'depth': 31.2,
         'PP-P':  (17.3,  5.0),
         'S-P':   (176.3, 5.0),
-        'SS-S':  (201.5 - 176.3, s(5,0, 5,0)), # = 25.2 ± 7.1
-        'SSS-S': (222.1 - 176.3, s(6,0, 5,0)), # = 45.8 ± 7.8
+        'SS-S':  (201.5 - 176.3, s(5,0, 5,0)),
+        'SSS-S': (222.1 - 176.3, s(6,0, 5,0)),
     },
     'S0809a': {
-        'delta': 31.3, 'depth': 31.2,          # italic
+        'delta': 31.3, 'depth': 31.2,
         'PP-P':  (15.5,  5.0),
         'PPP-P': (29.3,  7.0),
         'S-P':   (175.0, 1.0),
-        'SS-S':  (197.5 - 175.0, s(3,0, 1,0)), # = 22.5 ± 3.2
+        'SS-S':  (197.5 - 175.0, s(3,0, 1,0)),
     },
     'S0820a': {
         'delta': 31.6, 'depth': 30.5,
         'PP-P':  (15.7,  5.0),
         'S-P':   (176.5, 2.0),
-        'sS-S':  (186.2 - 176.5, s(3,0, 2,0)), # = 9.7 ± 3.6
-        'SS-S':  (201.4 - 176.5, s(5,0, 2,0)), # = 24.9 ± 5.4
+        'sS-S':  (186.2 - 176.5, s(3,0, 2,0)),
+        'SS-S':  (201.4 - 176.5, s(5,0, 2,0)),
     },
     'S0864a': {
         'delta': 30.5, 'depth': 31.3,
         'PP-P':  (18.0,  5.0),
         'S-P':   (169.0, 3.0),
-        'sS-S':  (181.2 - 169.0, s(4,0, 3,0)), # = 12.2 ± 5.0
-        'SS-S':  (194.0 - 169.0, s(3,0, 3,0)), # = 25.0 ± 4.2
-        'SSS-S': (216.1 - 169.0, s(6,0, 3,0)), # = 47.1 ± 6.7
-        'ScS-S': (505.0 - 169.0, s(8,0, 3,0)), # = 336.0 ± 8.5
+        'sS-S':  (181.2 - 169.0, s(4,0, 3,0)),
+        'SS-S':  (194.0 - 169.0, s(3,0, 3,0)),
+        'SSS-S': (216.1 - 169.0, s(6,0, 3,0)),
+        'ScS-S': (505.0 - 169.0, s(8,0, 3,0)),
     },
 }
 
@@ -307,6 +303,7 @@ SAMUEL_DATA = {
                'S-P': 216.0, 'ScS-S': 258.0},
 }
 
+
 def solidus_duncan2018(P_GPa):
     scalar_input = np.ndim(P_GPa) == 0
     P = np.atleast_1d(np.asarray(P_GPa, dtype=float))
@@ -339,8 +336,8 @@ def compute_khan_median():
     crust_z = np.linspace(0, 100, 200)
     core_z  = np.linspace(1500, MARS_RADIUS, 200)
 
-    crust_vp_all    = []; crust_vs_all = []; crust_rho_all = []
-    core_vp_all     = []; core_rho_all = []
+    crust_vp_all = []; crust_vs_all = []; crust_rho_all = []
+    core_vp_all  = []; core_rho_all = []
     lsl_top_depths  = []
     true_cmb_depths = []
 
@@ -354,11 +351,9 @@ def compute_khan_median():
             if solid_mask.sum() < 5 or liquid_mask.sum() < 5:
                 continue
 
-            # LSL頂部：第一個 Vs=0 的深度
             lsl_top = depth[liquid_mask][0]
             lsl_top_depths.append(lsl_top)
 
-            # 真正CMB：液態區裡密度最大跳變（>1 g/cm³，同介面）
             liq_depth = depth[liquid_mask]
             liq_rho   = rho[liquid_mask]
             drho      = np.diff(liq_rho)
@@ -371,7 +366,6 @@ def compute_khan_median():
                 true_cmb = liq_depth[np.argmax(drho) + 1]
             true_cmb_depths.append(true_cmb)
 
-            # 地殼
             sd = depth[solid_mask]; svp = Vp[solid_mask]
             svs = Vs[solid_mask];   sr  = rho[solid_mask]
             if sd.max() > crust_z.max():
@@ -379,7 +373,6 @@ def compute_khan_median():
                 crust_vs_all.append(np.interp(crust_z, sd, svs))
                 crust_rho_all.append(np.interp(crust_z, sd, sr))
 
-            # 核心（真正CMB以下）
             core_liq_mask = liquid_mask & (depth >= true_cmb)
             cd  = depth[core_liq_mask]
             cvp = Vp[core_liq_mask]
@@ -409,7 +402,7 @@ def compute_khan_median():
         'core_rho':       np.nanmedian(core_rho_all, axis=0),
         'lsl_top_depth':  lsl_top_median,
         'true_cmb_depth': true_cmb_median,
-        'cmb_depth':      lsl_top_median,   # 向下相容
+        'cmb_depth':      lsl_top_median,
     }
     return _KHAN_CACHE
 
@@ -583,7 +576,6 @@ def make_control_lines(p, O, line1):
 
 
 def _cleanup_keep_key_files(step_dir):
-    """保留 fort.56、ad.in、control，刪掉其他所有檔案"""
     keep = {'fort.56', 'ad.in', 'control'}
     if not os.path.isdir(step_dir):
         return
@@ -624,20 +616,47 @@ def run_hefesto_single(run_dir, control_lines, ad_in_content=None, timeout=1600)
 
 
 def read_fort56_full(fort56_path):
-    """
-    讀取完整 fort.56，回傳包含 T(K), S, P_GPa 的 dict。
-    同時計算 depth_km（從壓力積分）。
-    """
     try:
         with open(fort56_path) as f:
             f.readline()
             cols = f.readline().split()
         if not cols:
             return None
-        df = pd.read_csv(fort56_path, sep=r'\s+', skiprows=2, names=cols)
+
+        clean_lines = []
+        with open(fort56_path) as f:
+            for i, line in enumerate(f):
+                if i < 2:
+                    clean_lines.append(line)
+                    continue
+                import re
+                suspect = re.search(r'\d-\d', line)
+                if suspect:
+                    continue
+                clean_lines.append(line)
+
+        if len(clean_lines) <= 2:
+            return None
+
+        import io
+        df = pd.read_csv(io.StringIO(''.join(clean_lines)),
+                         sep=r'\s+', skiprows=2, names=cols)
         if df.empty:
             return None
+
     except Exception:
+        return None
+
+    for col in cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    key_cols = ['P(GPa)', 'T(K)', 'S(J/g/K)', 'rho(g/cm^3)',
+                'VS(km/s)', 'VP(km/s)']
+    for kc in key_cols:
+        if kc in df.columns and df[kc].isna().any():
+            df = df.dropna(subset=[kc])
+
+    if len(df) < 1:
         return None
 
     P_GPa = df['P(GPa)'].values
@@ -647,7 +666,6 @@ def read_fort56_full(fort56_path):
     Vs    = df['VS(km/s)'].values
     Vp    = df['VP(km/s)'].values
 
-    # depth 積分
     dP    = np.diff(P_GPa) * 1e9
     rho_m = (rho[:-1] + rho[1:]) / 2
     depth = np.zeros(len(P_GPa))
@@ -658,17 +676,16 @@ def read_fort56_full(fort56_path):
         depth[i+1] = depth[i] + dz_i
 
     return {
-        'depth_km':  depth,
-        'P_GPa':     P_GPa,
-        'T_K':       T_K,
-        'S':         S,
-        'Vp':        Vp,
-        'Vs':        Vs,
-        'rho':       rho,
+        'depth_km': depth,
+        'P_GPa':    P_GPa,
+        'T_K':      T_K,
+        'S':        S,
+        'Vp':       Vp,
+        'Vs':       Vs,
+        'rho':      rho,
     }
 
 
-# read_fort56 保留給舊介面相容（回傳相同格式）
 def read_fort56(fort56_path):
     return read_fort56_full(fort56_path)
 
@@ -677,11 +694,10 @@ def run_hefesto(params, run_dir):
     """
     三步驟 HeFESTo：
     Step 1: NPT @ (P_lit, T_lit)  → 讀 S_lit
-    Step 2: NPS @ S_lit           → HeFESTo 自己積分絕熱 T(P)
+    Step 2: NPT scan（6個壓力點，各跑兩個NPT插值找S=S_lit的T）→ 建絕熱T(P)
     Step 3: iensem=-1 with ad.in  → 完整 Vp/Vs/rho
 
     回傳: (fort56_path, fort56_data)
-      fort56_data 裡包含 'P_profile', 'T_profile'（即 ad.in 的內容）
     回傳 (None, None) 表示失敗
     """
     p     = composition_from_params(params)
@@ -704,38 +720,86 @@ def run_hefesto(params, run_dir):
         _cleanup_keep_key_files(dir1)
         return None, None
 
-    # S_lit: entropy at (P_lit, T_lit)，fort.56 只有一行所以取 [0]
     S_lit = float(data1['S'][0])
+    if not np.isfinite(S_lit) or S_lit <= 0 or S_lit > 10:
+        print(f"    Step 1: invalid S_lit={S_lit}, skip")
+        _cleanup_keep_key_files(dir1)
+        return None, None
     print(f"    S_lit = {S_lit:.6f} J/g/K  "
           f"@ P={P_lit:.2f} GPa, T={T_lit:.1f} K")
     _cleanup_keep_key_files(dir1)
 
-    # ── Step 2: NPS @ S_lit，從 P_lit 積分到 P_max ──────────
-    # line1 格式: P1,P2,nP,S1,S2,nT,iensem,superad,tfreeze
-    # S1=S2=S_lit, iensem=-2, superad=T_lit (P_lit 處的溫度猜測)
-    dir2  = os.path.join(run_dir, "s2_nps")
-    line2 = (f"{P_lit:.4f},{P_MAX_GPA:.4f},50,"
-             f"{S_lit:.6f},{S_lit:.6f},0,-2,{T_lit:.2f},0")
-    fort56_2 = run_hefesto_single(dir2, make_control_lines(p, O, line2))
-    if fort56_2 is None:
-        print("    Step 2 (NPS) failed")
-        _cleanup_keep_key_files(dir2)
-        return None, None
+    # ── Step 2: NPT scan 建絕熱溫度剖面 ────────────────────
+    print(f"    Step 2: NPT scan...")
+    P_scan_pts     = np.array([P_lit, 9.0, 12.0, 15.0, 17.0, P_MAX_GPA])
+    T_guess        = T_lit
+    P_adiab_list   = [P_lit]
+    T_adiab_list   = [T_lit]
+    n_npt_calls    = 0
+    n_interpolated = 0
 
-    data2 = read_fort56_full(fort56_2)
-    if data2 is None:
-        print("    Step 2 read failed")
-        _cleanup_keep_key_files(dir2)
-        return None, None
+    for i_p, P_target in enumerate(P_scan_pts[1:]):
+        d_lo, d_hi, T_lo, T_hi = None, None, None, None
 
-    P_adiab = data2['P_GPa']
-    T_adiab = data2['T_K']
-    print(f"    Adiabatic: T={T_adiab[0]:.1f}K @ P={P_adiab[0]:.2f}GPa"
+        for dT in [20.0, 10.0, 5.0, 2.0]:
+            T_lo = T_guess - dT
+            T_hi = T_guess + dT
+
+            dir_lo  = os.path.join(run_dir, f"s2_scan_{i_p}_lo")
+            dir_hi  = os.path.join(run_dir, f"s2_scan_{i_p}_hi")
+            line_lo = (f"{P_target:.4f},{P_target:.4f},1,"
+                       f"{T_lo:.2f},{T_lo:.2f},0,0,0,0")
+            line_hi = (f"{P_target:.4f},{P_target:.4f},1,"
+                       f"{T_hi:.2f},{T_hi:.2f},0,0,0,0")
+
+            f_lo = run_hefesto_single(
+                dir_lo, make_control_lines(p, O, line_lo))
+            f_hi = run_hefesto_single(
+                dir_hi, make_control_lines(p, O, line_hi))
+            n_npt_calls += 2
+
+            d_lo = read_fort56_full(f_lo) if f_lo else None
+            d_hi = read_fort56_full(f_hi) if f_hi else None
+            _cleanup_keep_key_files(dir_lo)
+            _cleanup_keep_key_files(dir_hi)
+
+            if d_lo is not None and d_hi is not None:
+                break
+
+        if d_lo is None or d_hi is None:
+            # 所有 dT 都失敗 → 用前一個點的梯度外插
+            if len(T_adiab_list) >= 2:
+                dT_dP     = ((T_adiab_list[-1] - T_adiab_list[-2]) /
+                             (P_adiab_list[-1] - P_adiab_list[-2]))
+                T_adiab_p = (T_adiab_list[-1] +
+                             dT_dP * (P_target - P_adiab_list[-1]))
+            else:
+                T_adiab_p = T_guess
+            T_adiab_p = float(np.clip(T_adiab_p, 800, 4000))
+            print(f"    P={P_target:.1f} GPa: interpolated T={T_adiab_p:.1f}K")
+            n_interpolated += 1
+        else:
+            S_lo = float(d_lo['S'][0])
+            S_hi = float(d_hi['S'][0])
+            if abs(S_hi - S_lo) < 1e-8:
+                T_adiab_p = T_guess
+            else:
+                T_adiab_p = (T_lo + (S_lit - S_lo) *
+                             (T_hi - T_lo) / (S_hi - S_lo))
+            T_adiab_p = float(np.clip(T_adiab_p, 800, 4000))
+
+        P_adiab_list.append(P_target)
+        T_adiab_list.append(T_adiab_p)
+        T_guess = T_adiab_p
+
+    P_adiab = np.array(P_adiab_list)
+    T_adiab = np.array(T_adiab_list)
+    print(f"    Adiabatic (NPT scan, {n_npt_calls} calls, "
+          f"{n_interpolated} interp): "
+          f"T={T_adiab[0]:.1f}K @ P={P_adiab[0]:.2f}GPa"
           f"  →  T={T_adiab[-1]:.1f}K @ P={P_adiab[-1]:.2f}GPa")
-    _cleanup_keep_key_files(dir2)
 
     # ── 合併 conductive + adiabatic → ad.in ─────────────────
-    # Conductive segment: surface (T_surf) → P_lit (T_lit)
     P_cond = np.linspace(1.04, P_lit, 100)
     T_cond = T_SURF + (T_lit - T_SURF) * (P_cond / P_lit)
 
@@ -765,8 +829,7 @@ def run_hefesto(params, run_dir):
         print("    Step 3 read failed")
         return None, None
 
-    # 把 T_profile（即 ad.in）存進 data3
-    # T_profile 覆蓋整段（conductive + adiabatic）
+    print("    Step 3 OK  (adiabat method=NPT_scan)")
     data3['P_profile'] = P_full
     data3['T_profile'] = T_full
 
@@ -774,9 +837,6 @@ def run_hefesto(params, run_dir):
 
 
 def run_hefesto_bml(params, run_dir, P_top, P_bottom, T_bml, n_points=20):
-    """
-    BML：等溫剖面，iensem=-1 with ad.in
-    """
     p = composition_from_params(params)
     O = compute_oxygen(p)
 
@@ -789,8 +849,8 @@ def run_hefesto_bml(params, run_dir, P_top, P_bottom, T_bml, n_points=20):
     dir_bml = os.path.join(run_dir, "bml")
     line    = f"{P_top:.4f},{P_bottom:.4f},{n_points},0,0,0,-1,0,0"
     fort56  = run_hefesto_single(dir_bml,
-                                  make_control_lines(p, O, line),
-                                  ad_in_content=ad_in)
+                                 make_control_lines(p, O, line),
+                                 ad_in_content=ad_in)
     _cleanup_keep_key_files(dir_bml)
     return fort56
 
@@ -810,10 +870,6 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
     lsl_top_depth  = khan['lsl_top_depth']
     true_cmb_depth = khan['true_cmb_depth']
     mantle_bottom  = lsl_top_depth
-
-    if bml_data is not None:
-        pass  # mantle_bottom = lsl_top_depth（BML接在地幔底部）
-    # else: mantle_bottom = lsl_top_depth（直接接核心）
 
     hef_depth = fort56_data['depth_km']
     hef_Vp    = fort56_data['Vp']
@@ -840,16 +896,14 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
             bml_depth = bml_data['depth_km']
             bml_vp    = bml_data['Vp']
             bml_rho   = bml_data['rho']
-            bml_mask  = (bml_depth >= mantle_bottom) & (bml_depth <= true_cmb_depth)
+            bml_mask  = ((bml_depth >= mantle_bottom) &
+                         (bml_depth <= true_cmb_depth))
 
-            # 取 BML 頂部的速度和密度
             bml_vp_top  = float(bml_vp[bml_mask][0])
             bml_rho_top = float(bml_rho[bml_mask][0])
 
-            # 先寫 mantle 底部（固態，有 Vs）
             f.write(f"{man_depth[-1]:.3f}  "
                     f"{man_Vp[-1]:.4f}  {man_Vs[-1]:.4f}  {man_rho[-1]:.4f}\n")
-            # 同一深度寫液態頂部（Vs=0）
             f.write(f"{man_depth[-1]:.3f}  "
                     f"{bml_vp_top:.4f}  0.0000  {bml_rho_top:.4f}\n")
             f.write("outer-core\n")
@@ -858,7 +912,7 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
             bml_r = bml_rho[bml_mask]
             for d, vp, r in zip(bml_d[1:], bml_v[1:], bml_r[1:]):
                 f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
-            
+
             core_z   = khan['core_z']
             core_vp  = khan['core_vp']
             core_rho = khan['core_rho']
@@ -876,18 +930,15 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
             core_rho = khan['core_rho']
             mask     = core_z >= true_cmb_depth
 
-            # 先寫 mantle 底部（固態，有 Vs）
             f.write(f"{man_depth[-1]:.3f}  "
                     f"{man_Vp[-1]:.4f}  {man_Vs[-1]:.4f}  {man_rho[-1]:.4f}\n")
-            # 同一深度寫液態頂部
             f.write(f"{true_cmb_depth:.3f}  "
                     f"{core_vp[mask][0]:.4f}  0.0000  {core_rho[mask][0]:.4f}\n")
             f.write("outer-core\n")
             for d, vp, r in zip(core_z[mask][1:],
-                                core_vp[mask][1:],
-                                core_rho[mask][1:]):
+                                 core_vp[mask][1:],
+                                 core_rho[mask][1:]):
                 f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
-
 
     build_taup_model(nd_path, output_folder=TAUP_WORK_DIR)
     return TauPyModel(model=npz_path)
@@ -908,19 +959,19 @@ def compute_mass_and_moi(fort56_data, khan_cache, bml_data=None):
     crust_r      = (R - crust_z[crust_mask] * 1000)
     crust_rho_si = crust_rho[crust_mask] * 1000
 
-    hef_depth    = fort56_data['depth_km']
-    hef_rho      = fort56_data['rho']
-    mantle_mask  = (hef_depth >= 100.0) & (hef_depth <= mantle_bottom_km)
-    man_r        = (R - hef_depth[mantle_mask] * 1000)
-    man_rho_si   = hef_rho[mantle_mask] * 1000
+    hef_depth   = fort56_data['depth_km']
+    hef_rho     = fort56_data['rho']
+    mantle_mask = (hef_depth >= 100.0) & (hef_depth <= mantle_bottom_km)
+    man_r       = (R - hef_depth[mantle_mask] * 1000)
+    man_rho_si  = hef_rho[mantle_mask] * 1000
 
     if bml_data is not None:
-        bml_depth    = bml_data['depth_km']
-        bml_rho      = bml_data['rho']
-        bml_mask     = (bml_depth >= mantle_bottom_km) & \
-                       (bml_depth <= true_cmb_km)
-        bml_r        = (R - bml_depth[bml_mask] * 1000)
-        bml_rho_si   = bml_rho[bml_mask] * 1000
+        bml_depth  = bml_data['depth_km']
+        bml_rho    = bml_data['rho']
+        bml_mask   = ((bml_depth >= mantle_bottom_km) &
+                      (bml_depth <= true_cmb_km))
+        bml_r      = (R - bml_depth[bml_mask] * 1000)
+        bml_rho_si = bml_rho[bml_mask] * 1000
     else:
         bml_r      = np.array([])
         bml_rho_si = np.array([])
@@ -949,26 +1000,18 @@ def compute_mass_and_moi(fort56_data, khan_cache, bml_data=None):
 # ============================================================
 
 def compute_solidus_penalty(fort56_data, params):
-    """
-    兩段分開：
-    1. Mantle：用 T_profile（ad.in）對每個壓力點比較 solidus
-    2. BML：用 T_bml 跟 solidus(P_BML_BOTTOM) 比
-    """
     penalty = 0.0
 
-    # ── Mantle 段 ──────────────────────────────────────────
     P_prof = fort56_data.get('P_profile', None)
     T_prof = fort56_data.get('T_profile', None)
 
     if P_prof is not None and T_prof is not None:
-        # 只看地幔段：P_lit 以上到 BML 頂部
         P_bml_top   = P_BML_TOP
         P_lit       = params['P_lit']
         mantle_mask = (P_prof >= P_lit) & (P_prof <= P_bml_top)
         P_m = P_prof[mantle_mask]
         T_m = T_prof[mantle_mask]
 
-        mantle_excess = 0.0
         if len(P_m) > 0:
             T_sol_arr     = solidus_duncan2018(P_m)
             excess        = T_m - T_sol_arr
@@ -977,7 +1020,6 @@ def compute_solidus_penalty(fort56_data, params):
                 print(f"    Mantle solidus penalty = {mantle_excess:.4f}")
                 penalty += mantle_excess
 
-    # ── BML 段 ─────────────────────────────────────────────
     if params is not None:
         T_bml     = params['T_bml']
         T_sol_bml = float(solidus_duncan2018(P_BML_BOTTOM))
@@ -992,8 +1034,11 @@ def compute_solidus_penalty(fort56_data, params):
 # ============================================================
 # Misfit
 # ============================================================
+
 def _diff(times, a, b):
     return times[a] - times[b] if a in times and b in times else None
+
+
 def compute_misfit(taup_model, obs_dataset, fort56_data,
                    khan_cache, bml_data=None, params=None):
 
@@ -1038,22 +1083,40 @@ def compute_misfit(taup_model, obs_dataset, fort56_data,
             if phase not in pred or pred[phase] is None:
                 continue
             obs_t, sigma = obs_val
-            tt_total += abs(obs_t - pred[phase]) / sigma
+            if sigma <= 0:
+                continue
+            if not np.isfinite(obs_t) or not np.isfinite(pred[phase]):
+                continue
+            val = abs(obs_t - pred[phase]) / sigma
+            if not np.isfinite(val):
+                print(f"    WARNING: non-finite TT at {event} {phase}: "
+                      f"obs={obs_t:.2f} pred={pred[phase]:.2f} "
+                      f"sigma={sigma:.2f} val={val}")
+                continue
+            tt_total += val
             tt_n     += 1
 
     tt_misfit = tt_total / tt_n if tt_n > 0 else 999.0
+    if not np.isfinite(tt_misfit):
+        tt_misfit = 999.0
 
     M_pred, moi_pred = compute_mass_and_moi(fort56_data, khan_cache,
                                              bml_data=bml_data)
     mass_misfit = abs(MARS_MASS_OBS - M_pred) / MARS_MASS_SIGMA
     moi_misfit  = abs(MOI_OBS - moi_pred)     / MOI_SIGMA
 
-    # Solidus penalty（完整版，逐點比較）
-    solidus_penalty = compute_solidus_penalty(fort56_data, params)
+    if not np.isfinite(mass_misfit): mass_misfit = 999.0
+    if not np.isfinite(moi_misfit):  moi_misfit  = 999.0
 
-    total_n      = tt_n + 2  # +2: mass, MOI
+    solidus_penalty = compute_solidus_penalty(fort56_data, params)
+    if not np.isfinite(solidus_penalty): solidus_penalty = 0.0
+
+    total_n      = tt_n + 2
     total_misfit = (tt_total + mass_misfit + moi_misfit
                     + solidus_penalty) / total_n
+
+    if not np.isfinite(total_misfit):
+        total_misfit = 999.0
 
     print(f"    TT misfit   = {tt_misfit:.4f}  (n={tt_n})")
     print(f"    Mass misfit = {mass_misfit:.4f}  "
@@ -1076,22 +1139,20 @@ def compute_misfit(taup_model, obs_dataset, fort56_data,
 # forward model
 # ============================================================
 
-def forward(params, run_dir, model_name, khan_cache):
+def forward(params, run_dir, model_name, khan_cache,
+            skip_bml_density_check=False):
 
     fort56, fort56_data = run_hefesto(params, run_dir)
     if fort56 is None or fort56_data is None:
         return None, None, None
 
-    P_bml_bottom = P_BML_BOTTOM
-    P_bml_top    = P_BML_TOP
-
     fort56_bml_path = run_hefesto_bml(
         params   = {'T_lit': params['T_bml'],
-                    'P_lit': P_bml_top,
+                    'P_lit': P_BML_TOP,
                     'Mg#':   params['Mg#_bml']},
         run_dir  = run_dir,
-        P_top    = P_bml_top,
-        P_bottom = P_bml_bottom,
+        P_top    = P_BML_TOP,
+        P_bottom = P_BML_BOTTOM,
         T_bml    = params['T_bml'],
     )
 
@@ -1107,15 +1168,14 @@ def forward(params, run_dir, model_name, khan_cache):
             rho_bml_top       = float(bml_raw['rho'][0])
             rho_bml_bottom    = float(bml_raw['rho'][-1])
 
-            # 從 khan_cache 取真正CMB頂部的核心密度
             core_z    = khan_cache['core_z']
             core_rho  = khan_cache['core_rho']
             true_cmb  = khan_cache['true_cmb_depth']
             core_mask = core_z >= true_cmb
             rho_core_top = float(core_rho[core_mask][0]) if core_mask.any() else 6.4
 
-            upper_contrast = rho_bml_top    - rho_mantle_bottom  # >0 = 穩定
-            lower_contrast = rho_core_top   - rho_bml_bottom     # >0 = 穩定
+            upper_contrast = rho_bml_top  - rho_mantle_bottom
+            lower_contrast = rho_core_top - rho_bml_bottom
 
             print(f"    BML density: mantle_bot={rho_mantle_bottom:.4f}  "
                   f"bml_top={rho_bml_top:.4f}  "
@@ -1124,7 +1184,7 @@ def forward(params, run_dir, model_name, khan_cache):
             print(f"    Upper contrast={upper_contrast:+.4f}  "
                   f"Lower contrast={lower_contrast:+.4f}")
 
-            if upper_contrast <= 0:
+            if upper_contrast <= 0 and not skip_bml_density_check:
                 print(f"    BML REJECTED: upper interface unstable")
                 return 999.0, 1, {
                     'tt': 999.0, 'mass': 999.0, 'moi': 999.0,
@@ -1133,7 +1193,7 @@ def forward(params, run_dir, model_name, khan_cache):
                     'lower_contrast': lower_contrast,
                 }
 
-            if lower_contrast <= 0:
+            if lower_contrast <= 0 and not skip_bml_density_check:
                 print(f"    BML REJECTED: lower interface unstable")
                 return 999.0, 1, {
                     'tt': 999.0, 'mass': 999.0, 'moi': 999.0,
@@ -1220,7 +1280,6 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         run_dir    = os.path.join(chain_dir, "step_current")
         model_name = f"mcmc_c{chain_id:02d}_current"
 
-        # ── Starting point retry ──────────────────────────────
         MAX_RETRIES = 20
         for attempt in range(MAX_RETRIES):
             if attempt == 0:
@@ -1238,9 +1297,10 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                       f"Mg#_bml={trial['Mg#_bml']:.3f}")
 
             current_misfit, _, current_components = forward(
-                trial, run_dir, model_name, khan_cache)
+                trial, run_dir, model_name, khan_cache,
+                skip_bml_density_check=True)
 
-            if current_misfit is not None and current_misfit < 990.0:
+            if current_misfit is not None and np.isfinite(current_misfit):
                 current = trial
                 print(f"  Starting point OK "
                       f"(attempt {attempt+1}): misfit={current_misfit:.4f}")
@@ -1267,26 +1327,29 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         proposed_misfit, n_data, components = forward(
             proposed, run_dir, model_name, khan_cache)
 
-        if proposed_misfit is None:
+        if proposed_misfit is None or proposed_misfit >= 990.0:
             accepted        = False
             proposed_misfit = 999.0
-            components      = {'tt': 999.0, 'mass': 999.0,
-                               'moi': 999.0, 'solidus': 0.0}
+            components      = {
+                'tt': 999.0, 'mass': 999.0,
+                'moi': 999.0, 'solidus': 0.0,
+                'upper_contrast': components.get('upper_contrast') if components else None,
+                'lower_contrast': components.get('lower_contrast') if components else None,
+            }
         else:
             delta_misfit = proposed_misfit - current_misfit
             if delta_misfit <= 0:
                 accepted = True
             else:
-                log_alpha = -delta_misfit/ MCMC_TEMPERATURE
+                log_alpha = -delta_misfit / MCMC_TEMPERATURE
                 accepted  = np.log(rng.uniform()) < log_alpha
 
         if accepted:
-            current          = proposed
-            current_misfit   = proposed_misfit
+            current            = proposed
+            current_misfit     = proposed_misfit
             current_components = components
-            accept_count    += 1
+            accept_count      += 1
 
-        # ── 每步結束清理：只保留 s3_final/{fort.56, ad.in, control} ──
         if os.path.isdir(run_dir):
             for sub in list(os.listdir(run_dir)):
                 sub_path = os.path.join(run_dir, sub)
@@ -1303,7 +1366,6 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                                 except Exception:
                                     pass
                 else:
-                    # s1_npt, s2_nps, bml → 整個刪除
                     try:
                         if os.path.isfile(sub_path):
                             os.remove(sub_path)
@@ -1315,7 +1377,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         elapsed     = (datetime.now() - t0).total_seconds()
         accept_rate = accept_count / (step - step_start + 1) * 100
 
-        uc = current_components.get('upper_contrast')
+        uc     = current_components.get('upper_contrast')
         uc_str = f"{uc:+.4f}" if uc is not None else "N/A"
         print(f"  Step {step+1:4d}: misfit={current_misfit:.4f}  "
               f"{'ACCEPT' if accepted else 'reject'}  "
@@ -1323,17 +1385,17 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
               f"upper_contrast={uc_str}  ({elapsed:.0f}s)")
 
         chain.append({
-            'step':             step + 1,
-            'params':           current,
-            'misfit':           current_misfit,
-            'misfit_tt':        current_components.get('tt',      999.0),
-            'misfit_mass':      current_components.get('mass',    999.0),
-            'misfit_moi':       current_components.get('moi',     999.0),
-            'misfit_solidus':   current_components.get('solidus', 0.0),
-            'upper_contrast':   current_components.get('upper_contrast'),
-            'lower_contrast':   current_components.get('lower_contrast'),
-            'accepted':         bool(accepted),
-            'accept_rate':      accept_rate,
+            'step':           step + 1,
+            'params':         current,
+            'misfit':         current_misfit,
+            'misfit_tt':      current_components.get('tt',      999.0),
+            'misfit_mass':    current_components.get('mass',    999.0),
+            'misfit_moi':     current_components.get('moi',     999.0),
+            'misfit_solidus': current_components.get('solidus', 0.0),
+            'upper_contrast': current_components.get('upper_contrast'),
+            'lower_contrast': current_components.get('lower_contrast'),
+            'accepted':       bool(accepted),
+            'accept_rate':    accept_rate,
         })
 
         if (step + 1) % 10 == 0:

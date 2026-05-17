@@ -1,12 +1,12 @@
 """
 21_mcmc_NPS_clean.py
-
-主要更新：
-1. run_hefesto() 改為三步驟
-   Step 1: NPT @ (P_lit, T_lit)  → 讀 S_lit
-   Step 2: NPT scan（6個壓力點，各跑兩個NPT插值找S=S_lit的T）→ 建絕熱T(P)
-   Step 3: iensem=-1 with ad.in  → 完整 Vp/Vs/rho
-2. 移除舊版 NPS 分段邏輯殘留（data_seg, seg_ok, P_adiab_segs）
+ 
+Major updates:
+1. run_hefesto() restructured into three steps
+   Step 1: NPT @ (P_lit, T_lit)  → read S_lit
+   Step 2: NPT scan (6 pressure points, two NPT runs each, interpolate to find T where S=S_lit) → build adiabatic T(P)
+   Step 3: iensem=-1 with ad.in  → full Vp/Vs/rho profile
+2. Removed legacy NPS segmentation logic (data_seg, seg_ok, P_adiab_segs)
 """
 
 import os
@@ -692,19 +692,19 @@ def read_fort56(fort56_path):
 
 def run_hefesto(params, run_dir):
     """
-    三步驟 HeFESTo：
-    Step 1: NPT @ (P_lit, T_lit)  → 讀 S_lit
-    Step 2: NPT scan（6個壓力點，各跑兩個NPT插值找S=S_lit的T）→ 建絕熱T(P)
-    Step 3: iensem=-1 with ad.in  → 完整 Vp/Vs/rho
-
-    回傳: (fort56_path, fort56_data)
-    回傳 (None, None) 表示失敗
+    Three-step HeFESTo run:
+    Step 1: NPT @ (P_lit, T_lit)  → read S_lit
+    Step 2: NPT scan (6 pressure points, two NPT runs each, interpolate to find T where S=S_lit) → build adiabatic T(P)
+    Step 3: iensem=-1 with ad.in  → full Vp/Vs/rho profile
+ 
+    Returns: (fort56_path, fort56_data)
+    Returns (None, None) on failure
     """
     p     = composition_from_params(params)
     O     = compute_oxygen(p)
     T_lit = p['T_lit']
     P_lit = p['P_lit']
-
+ 
     # ── Step 1: NPT single point @ (P_lit, T_lit) ───────────
     dir1  = os.path.join(run_dir, "s1_npt")
     line1 = f"{P_lit:.4f},{P_lit:.4f},1,{T_lit:.2f},{T_lit:.2f},0,0,0,0"
@@ -713,13 +713,13 @@ def run_hefesto(params, run_dir):
         print("    Step 1 failed")
         _cleanup_keep_key_files(dir1)
         return None, None
-
+ 
     data1 = read_fort56_full(fort56_1)
     if data1 is None:
         print("    Step 1 read failed")
         _cleanup_keep_key_files(dir1)
         return None, None
-
+ 
     S_lit = float(data1['S'][0])
     if not np.isfinite(S_lit) or S_lit <= 0 or S_lit > 10:
         print(f"    Step 1: invalid S_lit={S_lit}, skip")
@@ -728,8 +728,8 @@ def run_hefesto(params, run_dir):
     print(f"    S_lit = {S_lit:.6f} J/g/K  "
           f"@ P={P_lit:.2f} GPa, T={T_lit:.1f} K")
     _cleanup_keep_key_files(dir1)
-
-    # ── Step 2: NPT scan 建絕熱溫度剖面 ────────────────────
+ 
+    # ── Step 2: NPT scan to build adiabatic temperature profile ────────────────────
     print(f"    Step 2: NPT scan...")
     P_scan_pts     = np.array([P_lit, 9.0, 12.0, 15.0, 17.0, P_MAX_GPA])
     T_guess        = T_lit
@@ -737,37 +737,37 @@ def run_hefesto(params, run_dir):
     T_adiab_list   = [T_lit]
     n_npt_calls    = 0
     n_interpolated = 0
-
+ 
     for i_p, P_target in enumerate(P_scan_pts[1:]):
         d_lo, d_hi, T_lo, T_hi = None, None, None, None
-
+ 
         for dT in [20.0, 10.0, 5.0, 2.0]:
             T_lo = T_guess - dT
             T_hi = T_guess + dT
-
+ 
             dir_lo  = os.path.join(run_dir, f"s2_scan_{i_p}_lo")
             dir_hi  = os.path.join(run_dir, f"s2_scan_{i_p}_hi")
             line_lo = (f"{P_target:.4f},{P_target:.4f},1,"
                        f"{T_lo:.2f},{T_lo:.2f},0,0,0,0")
             line_hi = (f"{P_target:.4f},{P_target:.4f},1,"
                        f"{T_hi:.2f},{T_hi:.2f},0,0,0,0")
-
+ 
             f_lo = run_hefesto_single(
                 dir_lo, make_control_lines(p, O, line_lo))
             f_hi = run_hefesto_single(
                 dir_hi, make_control_lines(p, O, line_hi))
             n_npt_calls += 2
-
+ 
             d_lo = read_fort56_full(f_lo) if f_lo else None
             d_hi = read_fort56_full(f_hi) if f_hi else None
             _cleanup_keep_key_files(dir_lo)
             _cleanup_keep_key_files(dir_hi)
-
+ 
             if d_lo is not None and d_hi is not None:
                 break
-
+ 
         if d_lo is None or d_hi is None:
-            # 所有 dT 都失敗 → 用前一個點的梯度外插
+            # all dT attempts failed → extrapolate from previous point gradient
             if len(T_adiab_list) >= 2:
                 dT_dP     = ((T_adiab_list[-1] - T_adiab_list[-2]) /
                              (P_adiab_list[-1] - P_adiab_list[-2]))
@@ -787,52 +787,52 @@ def run_hefesto(params, run_dir):
                 T_adiab_p = (T_lo + (S_lit - S_lo) *
                              (T_hi - T_lo) / (S_hi - S_lo))
             T_adiab_p = float(np.clip(T_adiab_p, 800, 4000))
-
+ 
         P_adiab_list.append(P_target)
         T_adiab_list.append(T_adiab_p)
         T_guess = T_adiab_p
-
+ 
     P_adiab = np.array(P_adiab_list)
     T_adiab = np.array(T_adiab_list)
     print(f"    Adiabatic (NPT scan, {n_npt_calls} calls, "
           f"{n_interpolated} interp): "
           f"T={T_adiab[0]:.1f}K @ P={P_adiab[0]:.2f}GPa"
           f"  →  T={T_adiab[-1]:.1f}K @ P={P_adiab[-1]:.2f}GPa")
-
-    # ── 合併 conductive + adiabatic → ad.in ─────────────────
+ 
+    # ── Merge conductive + adiabatic → ad.in ─────────────────
     P_cond = np.linspace(1.04, P_lit, 100)
     T_cond = T_SURF + (T_lit - T_SURF) * (P_cond / P_lit)
-
+ 
     P_full = np.concatenate([P_cond, P_adiab])
     T_full = np.concatenate([T_cond, T_adiab])
     sort_idx       = np.argsort(P_full)
     P_full, T_full = P_full[sort_idx], T_full[sort_idx]
     _, uniq        = np.unique(P_full, return_index=True)
     P_full, T_full = P_full[uniq], T_full[uniq]
-
+ 
     ad_in = "".join(f"{P:.6f} 0.000000 {T:.6f}\n"
                     for P, T in zip(P_full, T_full))
-
-    # ── Step 3: iensem=-1，用 ad.in 跑完整計算 ──────────────
+ 
+    # ── Step 3: iensem=-1, run full calculation with ad.in ──────────────
     dir3  = os.path.join(run_dir, "s3_final")
     line3 = f"0,{P_MAX_GPA:.0f},50,0,0,0,-1,0,0"
     fort56_3 = run_hefesto_single(dir3, make_control_lines(p, O, line3),
                                   ad_in_content=ad_in)
     _cleanup_keep_key_files(dir3)
-
+ 
     if fort56_3 is None:
         print("    Step 3 failed")
         return None, None
-
+ 
     data3 = read_fort56_full(fort56_3)
     if data3 is None:
         print("    Step 3 read failed")
         return None, None
-
+ 
     print("    Step 3 OK  (adiabat method=NPT_scan)")
     data3['P_profile'] = P_full
     data3['T_profile'] = T_full
-
+ 
     return fort56_3, data3
 
 
@@ -1278,7 +1278,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         }
     else:
         run_dir    = os.path.join(chain_dir, "step_current")
-        model_name = f"mcmc_c{chain_id:02d}_current"
+        model_name = f"mcmc_{prefix}_c{chain_id:02d}_current"
 
         MAX_RETRIES = 20
         for attempt in range(MAX_RETRIES):
@@ -1322,7 +1322,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         t0         = datetime.now()
         proposed   = propose(current, rng)
         run_dir    = os.path.join(chain_dir, f"step_{step+1:05d}")
-        model_name = f"mcmc_c{chain_id:02d}_s{step+1:05d}"
+        model_name = f"mcmc_{prefix}_c{chain_id:02d}_s{step+1:05d}"
 
         proposed_misfit, n_data, components = forward(
             proposed, run_dir, model_name, khan_cache)
@@ -1353,7 +1353,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         if os.path.isdir(run_dir):
             for sub in list(os.listdir(run_dir)):
                 sub_path = os.path.join(run_dir, sub)
-                if sub == 's3_final':
+                if sub in {'s3_final', 'bml'}:
                     if os.path.isdir(sub_path):
                         for fname in list(os.listdir(sub_path)):
                             if fname not in {'fort.56', 'ad.in', 'control'}:

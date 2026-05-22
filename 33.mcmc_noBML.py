@@ -843,8 +843,15 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
             core_rho = khan['core_rho']
             mask     = core_z >= true_cmb_depth
 
+            # Last mantle layer (from HeFESTo)
             f.write(f"{man_depth[-1]:.3f}  "
                     f"{man_Vp[-1]:.4f}  {man_Vs[-1]:.4f}  {man_rho[-1]:.4f}\n")
+            # CMB discontinuity: write the SAME depth twice so TauP sees
+            # a velocity jump instead of a continuous gradient to Vs=0.
+            # Line 1: mantle side at CMB depth (Vs still > 0)
+            f.write(f"{true_cmb_depth:.3f}  "
+                    f"{man_Vp[-1]:.4f}  {man_Vs[-1]:.4f}  {man_rho[-1]:.4f}\n")
+            # Line 2: core side at CMB depth (Vs = 0)
             f.write(f"{true_cmb_depth:.3f}  "
                     f"{core_vp[mask][0]:.4f}  0.0000  {core_rho[mask][0]:.4f}\n")
             f.write("outer-core\n")

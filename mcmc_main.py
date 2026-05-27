@@ -1,12 +1,53 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-21_mcmc_NPS_clean.py
- 
-Major updates:
+Created on Tue May 26 23:09:57 2026
+
+@author: chingchen
+
+Major updates from 21_mcmc_NPS.py:
+
 1. run_hefesto() restructured into three steps
    Step 1: NPT @ (P_lit, T_lit)  → read S_lit
-   Step 2: NPT scan (6 pressure points, two NPT runs each, interpolate to find T where S=S_lit) → build adiabatic T(P)
-   Step 3: iensem=-1 with ad.in  → full Vp/Vs/rho profile
-2. Removed legacy NPS segmentation logic (data_seg, seg_ok, P_adiab_segs)
+   Step 2: NPT scan (pressure points up to P_bml_top, two NPT runs each,
+           interpolate to find T where S=S_lit) → build adiabatic T(P)
+   Step 3: iensem=-1 with ad.in → full Vp/Vs/rho profile
+   P_bml_top is now dynamic (= pressure at BML top = TRUE_CMB_DEPTH - BML_thickness)
+
+2. BML (Basal Mantle Layer) physics
+   - BML defined from iron core upward: top = TRUE_CMB_DEPTH - BML_thickness
+   - BML_thickness is a free MCMC parameter (100–400 km)
+   - BML temperature: linear from T_mantle_bottom (top, from mantle isentrope)
+     to T_bml (bottom, free MCMC parameter)
+   - Melt fraction φ computed per-point via solidus/liquidus (Duncan 2018 +
+     Ruedas 2017) with Mg# correction (Elkins-Tanton Fe correction)
+   - Pierru 2026 velocity correction applied per-point based on φ
+   - outer-core marker placed at first depth where φ ≥ 0.30
+   - BML solidus penalty removed: data decides whether BML exists
+
+3. Samuel 2023 model (replaces Khan 2023)
+   - compute_samuel_median() reads all vp*.dat + vs*.dat from SAMUEL_DATA_DIR
+   - LSL_TOP_DEPTH = 1574.6 km, TRUE_CMB_DEPTH = 1743.3 km (hardcoded from
+     rho_profile.dat density jumps)
+   - Core rho from rho_profile.dat 
+   - Gravity and pressure profiles both integrated from rho_profile.dat
+   - pressure_mars(depth_km) function added
+   - SAMUEL_DATA used for travel time misfit (replaces KHAN_DATA)
+   - PP-PbdiffPcP constraint added for S1000a (Samuel 2023 Table 1)
+
+4. MCMC mechanics
+   - forward() returns 4 values: (misfit, n_data, components, fort56_data)
+   - Accepted steps save profile_s{step}.npz
+   - chain.json saved every step
+   - --random_start and --start CLI arguments added
+   - START_PARAMS updated from Samuel Tprofile.dat:
+     T_lit=1539 K, P_lit=3.69 GPa (lithosphere/adiabat transition ~300 km)
+
+5. Naming and cleanup
+   - LSL → BML throughout (lsl_top_depth → bml_top_depth)
+   - P_BML_TOP, P_MAX_GPA, P_BML_BOTTOM, BML_THICKNESS fixed constants removed
+   - KHAN_DATA removed
+   - TauP .nd discontinuity format fixed (two lines same depth + keyword)
 """
 
 import os
@@ -29,69 +70,93 @@ from obspy.taup.taup_create import build_taup_model
 
 MARS_RADIUS = 3389.5
 T_SURF      = 220.0
-P_MAX_GPA   = 19.0
 GAMMA       = 1.1
 MARS_MASS_OBS   = 6.4171e23
 MARS_MASS_SIGMA = MARS_MASS_OBS * 0.01
 MOI_OBS         = 0.3634
 MOI_SIGMA       = 0.0006
 MARS_RADIUS_M   = MARS_RADIUS * 1000
-
-P_BML_TOP     = 19.0
-P_BML_BOTTOM  = 21.0
-BML_THICKNESS = 150
 MCMC_TEMPERATURE = 1.0
 
 # ============================================================
-# gravity profiles
+# gravity and pressure profiles from SAMUEL_RHO_PROFILE_PATH
 # ============================================================
 
-_GRAVITY_DEPTH = None
-_GRAVITY_G     = None
+_GRAVITY_DEPTH  = None
+_GRAVITY_G      = None
+_PRESSURE_DEPTH = None
+_PRESSURE_GPA   = None
 
 def load_gravity_profile():
-    global _GRAVITY_DEPTH, _GRAVITY_G
+    global _GRAVITY_DEPTH, _GRAVITY_G, _PRESSURE_DEPTH, _PRESSURE_GPA
     if _GRAVITY_DEPTH is not None:
         return
 
     rho_path = SAMUEL_RHO_PROFILE_PATH
     try:
         data    = np.loadtxt(rho_path)
-        rho_all = data[:, 0]
-        r_all   = data[:, 1]
+        rho_all = data[:, 0]   # kg/m³
+        r_all   = data[:, 1]   # km radius
     except Exception as e:
-        print(f" no rho_profile.dat ({e}), used g=3.45")
-        _GRAVITY_DEPTH = np.array([0.0, 1600.0])
-        _GRAVITY_G     = np.array([3.45, 3.45])
+        print(f" no rho_profile.dat ({e}), using g=3.72 m/s²")
+        _GRAVITY_DEPTH  = np.array([0.0, MARS_RADIUS])
+        _GRAVITY_G      = np.array([3.72, 3.72])
+        _PRESSURE_DEPTH = np.array([0.0, MARS_RADIUS])
+        _PRESSURE_GPA   = np.array([0.0, 25.0])
         return
 
+    # sort by radius ascending (center → surface)
     idx = np.argsort(r_all)
-    rho = rho_all[idx]
-    r   = r_all[idx] * 1000
+    rho = rho_all[idx]        # kg/m³
+    r   = r_all[idx] * 1000   # m
 
     G_CONST = 6.674e-11
-    M_enc   = np.zeros(len(r))
+
+    # integrate enclosed mass → gravity
+    M_enc = np.zeros(len(r))
     for i in range(1, len(r)):
-        dr      = r[i] - r[i-1]
-        rho_mid = (rho[i] + rho[i-1]) / 2
-        r_mid   = (r[i]   + r[i-1])   / 2
+        dr       = r[i] - r[i-1]
+        rho_mid  = (rho[i] + rho[i-1]) / 2
+        r_mid    = (r[i]   + r[i-1])   / 2
         M_enc[i] = M_enc[i-1] + 4 * np.pi * rho_mid * r_mid**2 * dr
 
     g = np.zeros(len(r))
     g[1:] = G_CONST * M_enc[1:] / r[1:]**2
 
-    depth_km = (r[-1] - r) / 1000
-    sort_idx       = np.argsort(depth_km)
-    _GRAVITY_DEPTH = depth_km[sort_idx]
-    _GRAVITY_G     = g[sort_idx]
-    print(f"  Gravity profile loaded: surface {_GRAVITY_G[0]:.3f} m/s², "
-          f"CMB (~1533 km) {np.interp(1533, _GRAVITY_DEPTH, _GRAVITY_G):.3f} m/s²")
+    # convert to depth (surface = 0)
+    depth_km = (r[-1] - r) / 1000.0
+    sort_d   = np.argsort(depth_km)
+    _GRAVITY_DEPTH = depth_km[sort_d]
+    _GRAVITY_G     = g[sort_d]
+
+    # integrate pressure from surface downward
+    P_GPa = np.zeros(len(_GRAVITY_DEPTH))
+    rho_depth = rho[sort_d[::-1]][::-1]   # rho sorted by depth ascending
+    for i in range(1, len(_GRAVITY_DEPTH)):
+        dz        = (_GRAVITY_DEPTH[i] - _GRAVITY_DEPTH[i-1]) * 1000.0  # m
+        g_mid     = (_GRAVITY_G[i] + _GRAVITY_G[i-1]) / 2
+        rho_mid   = (rho_depth[i] + rho_depth[i-1]) / 2
+        P_GPa[i]  = P_GPa[i-1] + rho_mid * g_mid * dz / 1e9
+
+    _PRESSURE_DEPTH = _GRAVITY_DEPTH.copy()
+    _PRESSURE_GPA   = P_GPa
+
+    print(f"  Gravity profile loaded: surface g={_GRAVITY_G[0]:.3f} m/s²  "
+          f"P at {TRUE_CMB_DEPTH:.0f} km = "
+          f"{float(np.interp(TRUE_CMB_DEPTH, _PRESSURE_DEPTH, _PRESSURE_GPA)):.2f} GPa")
 
 
 def gravity_mars(depth_km):
     if _GRAVITY_DEPTH is None:
         load_gravity_profile()
     return np.interp(depth_km, _GRAVITY_DEPTH, _GRAVITY_G)
+
+
+def pressure_mars(depth_km):
+    """Return pressure in GPa at given depth(s) in km."""
+    if _PRESSURE_DEPTH is None:
+        load_gravity_profile()
+    return np.interp(depth_km, _PRESSURE_DEPTH, _PRESSURE_GPA)
 
 # ============================================================
 # composition
@@ -104,11 +169,12 @@ YM_BASE = {
 MGFE_TOTAL = YM_BASE['Mg'] + YM_BASE['Fe']
 
 START_PARAMS = {
-    'T_lit':   1952.92,
-    'P_lit':   6.0755,
-    'Mg#':     YM_BASE['Mg'] / (YM_BASE['Mg'] + YM_BASE['Fe']),
-    'T_bml':   2500.0,
-    'Mg#_bml': 0.7,
+    'T_lit':         1539.0,   # K @ ~300 km, from Samuel Tprofile.dat
+    'P_lit':         3.69,     # GPa @ ~300 km, lithosphere/adiabat transition
+    'Mg#':           YM_BASE['Mg'] / (YM_BASE['Mg'] + YM_BASE['Fe']),
+    'T_bml':         2200.0,   # K, BML bottom temperature
+    'Mg#_bml':       0.7,
+    'BML_thickness': 168.7,    # km = TRUE_CMB_DEPTH - LSL_TOP_DEPTH (Samuel median)
 }
 
 FIXED_PARAMS = {
@@ -117,190 +183,213 @@ FIXED_PARAMS = {
 }
 
 PRIOR = {
-    'T_lit':   (1000.0, 2600.0),
-    'P_lit':   (1.5,    9.0),
-    'Mg#':     (0.50,   0.86),
-    'T_bml':   (1800.0, 3500.0),
-    'Mg#_bml': (0.50,   0.80),
+    'T_lit':         (1000.0, 2600.0),
+    'P_lit':         (1.5,    9.0),
+    'Mg#':           (0.50,   0.86),
+    'T_bml':         (1800.0, 3500.0),
+    'Mg#_bml':       (0.50,   0.80),
+    'BML_thickness': (50.0,  400.0),  
 }
 
 STEP = {
-    'T_lit':   60.0,
-    'P_lit':   0.3,
-    'Mg#':     0.015,
-    'T_bml':   60.0,
-    'Mg#_bml': 0.015,
+    'T_lit':         60.0,
+    'P_lit':         0.3,
+    'Mg#':           0.015,
+    'T_bml':         60.0,
+    'Mg#_bml':       0.015,
+    'BML_thickness': 20.0,    
 }
 
 SIGMA = {
     'S-P': 10.0, 'pP-P': 3.0, 'sP-P': 5.0, 'PP-P': 8.0, 'PPP-P': 12.0,
     'sS-S': 5.0, 'SS-S': 5.0, 'SSS-S': 8.0, 'ScS-S': 12.0,
     'SS-PP': 10.0, 'SKS-PP': 10.0,
+    'PP-PbdiffPcP': 10.0,   
 }
-
 
 def s(a, sa, b, sb):
     return np.sqrt(sa**2 + sb**2)
 
-KHAN_DATA = {
-    'S0167b': {
-        'delta': 72.5, 'depth': 31.2,
-        'PP-P':  (37.0,  3.0),
-        'S-P':   (414.5, 2.0),
-        'SSS-S': (468.0 - 414.5, s(3,0, 2,0)),
-    },
-    'S0173a': {
-        'delta': 30.6, 'depth': 28.7,
-        'pP-P':  (11.1,  3.0),
-        'S-P':   (174.8, 2.0),
-        'sS-S':  (184.8 - 174.8, s(3,0, 2,0)),
-        'SS-S':  (197.9 - 174.8, s(2,0, 2,0)),
-        'ScS-S': (515.0 - 174.8, s(5,0, 2,0)),
-    },
-    'S0183a': {
-        'delta': 47.9, 'depth': 31.2,
-        'PP-P':  (24.5, 4.0),
-        'PPP-P': (43.0, 7.0),
-    },
-    'S0185a': {
-        'delta': 63.1, 'depth': 34.2,
-        'S-P':   (360.2, 2.0),
-        'sS-S':  (379.5 - 360.2, s(4,0, 2,0)),
-        'SSS-S': (412.5 - 360.2, s(6,0, 2,0)),
-    },
-    'S0235b': {
-        'delta': 29.6, 'depth': 27.4,
-        'PP-P':  (17.4,  2.0),
-        'PPP-P': (31.1,  7.0),
-        'S-P':   (166.0, 3.0),
-        'sS-S':  (178.7 - 166.0, s(3,0, 3,0)),
-        'SS-S':  (193.1 - 166.0, s(3,0, 3,0)),
-        'ScS-S': (512.0 - 166.0, s(8,0, 3,0)),
-    },
-    'S0325a': {
-        'delta': 42.4, 'depth': 33.1,
-        'pP-P':  (11.3,  3.0),
-        'S-P':   (230.7, 3.0),
-        'SS-S':  (260.7 - 230.7, s(4,0, 3,0)),
-        'SSS-S': (281.0 - 230.7, s(6,0, 3,0)),
-    },
-    'S0407a': {
-        'delta': 30.3, 'depth': 32.0,
-        'PP-P':  (17.8,  5.0),
-        'PPP-P': (33.0,  7.0),
-        'S-P':   (172.2, 2.0),
-        'sS-S':  (183.4 - 172.2, s(3,0, 2,0)),
-        'SS-S':  (196.4 - 172.2, s(5,0, 2,0)),
-    },
-    'S0409d': {
-        'delta': 29.8, 'depth': 31.2,
-        'S-P':   (162.5, 3.0),
-        'SS-S':  (184.9 - 162.5, s(4,0, 3,0)),
-        'SSS-S': (207.7 - 162.5, s(6,0, 3,0)),
-    },
-    'S0484b': {
-        'delta': 30.7, 'depth': 33.5,
-        'PP-P':  (18.1,  5.0),
-        'S-P':   (170.2, 1.0),
-        'sS-S':  (184.0 - 170.2, s(3,0, 1,0)),
-        'SS-S':  (196.8 - 170.2, s(3,0, 1,0)),
-    },
-    'S0784a': {
-        'delta': 31.1, 'depth': 30.6,
-        'PP-P':  (15.2,  4.0),
-        'PPP-P': (29.5,  7.0),
-        'S-P':   (173.0, 4.0),
-        'sS-S':  (182.2 - 173.0, s(4,0, 4,0)),
-        'SS-S':  (196.9 - 173.0, s(5,0, 4,0)),
-        'SSS-S': (221.9 - 173.0, s(6,0, 4,0)),
-    },
-    'S0802a': {
-        'delta': 31.9, 'depth': 31.2,
-        'PP-P':  (17.3,  5.0),
-        'S-P':   (176.3, 5.0),
-        'SS-S':  (201.5 - 176.3, s(5,0, 5,0)),
-        'SSS-S': (222.1 - 176.3, s(6,0, 5,0)),
-    },
-    'S0809a': {
-        'delta': 31.3, 'depth': 31.2,
-        'PP-P':  (15.5,  5.0),
-        'PPP-P': (29.3,  7.0),
-        'S-P':   (175.0, 1.0),
-        'SS-S':  (197.5 - 175.0, s(3,0, 1,0)),
-    },
-    'S0820a': {
-        'delta': 31.6, 'depth': 30.5,
-        'PP-P':  (15.7,  5.0),
-        'S-P':   (176.5, 2.0),
-        'sS-S':  (186.2 - 176.5, s(3,0, 2,0)),
-        'SS-S':  (201.4 - 176.5, s(5,0, 2,0)),
-    },
-    'S0864a': {
-        'delta': 30.5, 'depth': 31.3,
-        'PP-P':  (18.0,  5.0),
-        'S-P':   (169.0, 3.0),
-        'sS-S':  (181.2 - 169.0, s(4,0, 3,0)),
-        'SS-S':  (194.0 - 169.0, s(3,0, 3,0)),
-        'SSS-S': (216.1 - 169.0, s(6,0, 3,0)),
-        'ScS-S': (505.0 - 169.0, s(8,0, 3,0)),
-    },
-}
 
 SAMUEL_DATA = {
-    'S0154a': {'delta': 29.7,  'depth': 17.4, 'SS-S': 25.3, 'SSS-S': 35.0},
-    'S0173a': {'delta': 30.9,  'depth': 28.4,
-               'S-P': 178.8, 'sP-P': 9.43, 'PP-P': 19.9, 'PPP-P': 34.4,
-               'sS-S': 13.2, 'SS-S': 24.4, 'SSS-S': 40.5, 'ScS-S': 345.2},
-    'S0185a': {'delta': 54.8,  'depth': 17.4,
-               'S-P': 327.28, 'pP-P': 4.0, 'PP-P': 22.47, 'PPP-P': 49.3,
-               'sS-S': 10.0, 'SS-S': 30.9, 'SSS-S': 55.4, 'ScS-S': 152.3},
-    'S0235b': {'delta': 30.5,  'depth': 26.1,
-               'S-P': 171.4, 'PP-P': 18.6, 'PPP-P': 32.0,
-               'sS-S': 9.2, 'SS-S': 23.2, 'SSS-S': 33.3, 'ScS-S': 343.9},
-    'S0325a': {'delta': 42.0,  'depth': 33.8,
-               'S-P': 229.3, 'pP-P': 9.8, 'PP-P': 21.1, 'PPP-P': 34.4,
-               'sS-S': 13.8, 'SS-S': 26.1, 'SSS-S': 50.3, 'ScS-S': 220.4},
-    'S0407a': {'delta': 29.1,  'depth': 31.3,
-               'S-P': 170.7, 'pP-P': 6.77, 'PP-P': 23.38,
-               'sS-S': 13.3, 'SS-S': 21.1, 'SSS-S': 33.1, 'ScS-S': 370.0},
-    'S0409d': {'delta': 30.6,  'depth': 26.1,
-               'S-P': 163.2, 'pP-P': 8.3, 'PP-P': 27.6, 'PPP-P': 36.94,
-               'sS-S': 8.4, 'SS-S': 20.9, 'SSS-S': 39.8, 'ScS-S': 320.1},
-    'S0474a': {'delta': 20.7,  'depth': 30.7,
-               'S-P': 121.6, 'PP-P': 13.4, 'PPP-P': 24.8,
-               'SS-S': 15.8, 'SSS-S': 32.4},
-    'S0484b': {'delta': 31.3,  'depth': 24.9,
-               'S-P': 173.1, 'pP-P': 5.5, 'PP-P': 19.73,
-               'sS-S': 13.0, 'SS-S': 17.4, 'ScS-S': 322.3},
-    'S0784a': {'delta': 30.2,  'depth': 16.8,
-               'S-P': 179.3, 'pP-P': 6.5, 'PP-P': 13.7, 'PPP-P': 22.4,
-               'sS-S': 7.2, 'SS-S': 19.6, 'SSS-S': 28.0},
-    'S0802a': {'delta': 30.0,  'depth': 20.4,
-               'S-P': 180.3, 'pP-P': 4.0, 'PP-P': 25.6, 'PPP-P': 33.9,
-               'sS-S': 9.3, 'SS-S': 22.4, 'SSS-S': 36.5, 'ScS-S': 387.6},
-    'S0809a': {'delta': 30.7,  'depth': 16.0,
-               'S-P': 191.95, 'pP-P': 4.5, 'PP-P': 16.25, 'PPP-P': 29.65,
-               'sS-S': 8.1, 'SS-S': 23.8, 'SSS-S': 39.3, 'ScS-S': 373.5},
-    'S0820a': {'delta': 28.1,  'depth': 18.7,
-               'S-P': 174.1, 'PP-P': 21.9, 'PPP-P': 32.1, 'sS-S': 8.5},
-    'S0861a': {'delta': 54.5,  'depth': 15.5,
-               'S-P': 319.3, 'PP-P': 19.6, 'PPP-P': 47.6, 'SS-S': 41.1},
-    'S0864a': {'delta': 29.0,  'depth': 25.0,
-               'S-P': 171.4, 'PP-P': 18.0, 'PPP-P': 27.9,
-               'sS-S': 17.3, 'SS-S': 26.4},
-    'S0916d': {'delta': 30.2,  'depth': 16.3,
-               'S-P': 170.8, 'pP-P': 3.9, 'PP-P': 19.3, 'PPP-P': 36.1,
-               'SS-S': 19.0, 'SSS-S': 42.9, 'ScS-S': 342.8},
-    'S0918a': {'delta': 16.6,  'depth': 22.3,
-               'S-P': 102.4, 'PP-P': 12.8, 'PPP-P': 22.5,
-               'SS-S': 21.2, 'SSS-S': 35.0},
-    'S0976a': {'delta': 144.0, 'depth': 30.0,
-               'SS-PP': 854.4, 'SKS-PP': 303.9},
-    'S1000a': {'delta': 125.9, 'depth': 0.0,
-               'SS-PP': 749.0, 'SKS-PP': 339.3},
-    'S1094b': {'delta': 58.5,  'depth': 0.0, 'S-P': 343.0},
-    'S1222a': {'delta': 36.1,  'depth': 32.8,
-               'S-P': 216.0, 'ScS-S': 258.0},
+    'S0154a': {
+        'delta': 29.7,  'depth': 17.4,
+        'SS-S':  (25.3, 5.0),
+        'SSS-S': (35.0, 8.0),
+    },
+    'S0173a': {
+        'delta': 30.9,  'depth': 28.4,
+        'S-P':   (178.8,  5.0),
+        'sP-P':  (9.43,   5.0),
+        'PP-P':  (19.9,   8.0),
+        'PPP-P': (34.4,  12.0),
+        'sS-S':  (13.2,   5.0),
+        'SS-S':  (24.4,   5.0),
+        'SSS-S': (40.5,   8.0),
+        'ScS-S': (345.2, 12.0),
+    },
+    'S0185a': {
+        'delta': 54.8,  'depth': 17.4,
+        'S-P':   (327.28,  5.0),
+        'pP-P':  (4.0,     5.0),
+        'PP-P':  (22.47,   8.0),
+        'PPP-P': (49.3,   12.0),
+        'sS-S':  (10.0,    5.0),
+        'SS-S':  (30.9,    5.0),
+        'SSS-S': (55.4,    8.0),
+        'ScS-S': (152.3,  12.0),
+    },
+    'S0235b': {
+        'delta': 30.5,  'depth': 26.1,
+        'S-P':   (171.4,  5.0),
+        'PP-P':  (18.6,   8.0),
+        'PPP-P': (32.0,  12.0),
+        'sS-S':  (9.2,    5.0),
+        'SS-S':  (23.2,   5.0),
+        'SSS-S': (33.3,   8.0),
+        'ScS-S': (343.9, 12.0),
+    },
+    'S0325a': {
+        'delta': 42.0,  'depth': 33.8,
+        'S-P':   (229.3,  5.0),
+        'pP-P':  (9.8,    5.0),
+        'PP-P':  (21.1,   8.0),
+        'PPP-P': (34.4,  12.0),
+        'sS-S':  (13.8,   5.0),
+        'SS-S':  (26.1,   5.0),
+        'SSS-S': (50.3,   8.0),
+        'ScS-S': (220.4, 12.0),
+    },
+    'S0407a': {
+        'delta': 29.1,  'depth': 31.3,
+        'S-P':   (170.7,  5.0),
+        'pP-P':  (6.77,   5.0),
+        'PP-P':  (23.38,  8.0),
+        'sS-S':  (13.3,   5.0),
+        'SS-S':  (21.1,   5.0),
+        'SSS-S': (33.1,   8.0),
+        'ScS-S': (370.0, 12.0),
+    },
+    'S0409d': {
+        'delta': 30.6,  'depth': 26.1,
+        'S-P':   (163.2,  5.0),
+        'pP-P':  (8.3,    5.0),
+        'PP-P':  (27.6,   8.0),
+        'PPP-P': (36.94, 12.0),
+        'sS-S':  (8.4,    5.0),
+        'SS-S':  (20.9,   5.0),
+        'SSS-S': (39.8,   8.0),
+        'ScS-S': (320.1, 12.0),
+    },
+    'S0474a': {
+        'delta': 20.7,  'depth': 30.7,
+        'S-P':   (121.6,  5.0),
+        'PP-P':  (13.4,   8.0),
+        'PPP-P': (24.8,  12.0),
+        'SS-S':  (15.8,   5.0),
+        'SSS-S': (32.4,   8.0),
+    },
+    'S0484b': {
+        'delta': 31.3,  'depth': 24.9,
+        'S-P':   (173.1,  5.0),
+        'pP-P':  (5.5,    5.0),
+        'PP-P':  (19.73,  8.0),
+        'sS-S':  (13.0,   5.0),
+        'SS-S':  (17.4,   5.0),
+        'ScS-S': (322.3, 12.0),
+    },
+    'S0784a': {
+        'delta': 30.2,  'depth': 16.8,
+        'S-P':   (179.3,  5.0),
+        'pP-P':  (6.5,    5.0),
+        'PP-P':  (13.7,   8.0),
+        'PPP-P': (22.4,  12.0),
+        'sS-S':  (7.2,    5.0),
+        'SS-S':  (19.6,   5.0),
+        'SSS-S': (28.0,   8.0),
+    },
+    'S0802a': {
+        'delta': 30.0,  'depth': 20.4,
+        'S-P':   (180.3,  5.0),
+        'pP-P':  (4.0,    5.0),
+        'PP-P':  (25.6,   8.0),
+        'PPP-P': (33.9,  12.0),
+        'sS-S':  (9.3,    5.0),
+        'SS-S':  (22.4,   5.0),
+        'SSS-S': (36.5,   8.0),
+        'ScS-S': (387.6, 12.0),
+    },
+    'S0809a': {
+        'delta': 30.7,  'depth': 16.0,
+        'S-P':   (191.95,  5.0),
+        'pP-P':  (4.5,     5.0),
+        'PP-P':  (16.25,   8.0),
+        'PPP-P': (29.65,  12.0),
+        'sS-S':  (8.1,     5.0),
+        'SS-S':  (23.8,    5.0),
+        'SSS-S': (39.3,    8.0),
+        'ScS-S': (373.5,  12.0),
+    },
+    'S0820a': {
+        'delta': 28.1,  'depth': 18.7,
+        'S-P':   (174.1,  5.0),
+        'PP-P':  (21.9,   8.0),
+        'PPP-P': (32.1,  12.0),
+        'sS-S':  (8.5,    5.0),
+    },
+    'S0861a': {
+        'delta': 54.5,  'depth': 15.5,
+        'S-P':   (319.3,  5.0),
+        'PP-P':  (19.6,   8.0),
+        'PPP-P': (47.6,  12.0),
+        'SS-S':  (41.1,   5.0),
+    },
+    'S0864a': {
+        'delta': 29.0,  'depth': 25.0,
+        'S-P':   (171.4,  5.0),
+        'PP-P':  (18.0,   8.0),
+        'PPP-P': (27.9,  12.0),
+        'sS-S':  (17.3,   5.0),
+        'SS-S':  (26.4,   5.0),
+    },
+    'S0916d': {
+        'delta': 30.2,  'depth': 16.3,
+        'S-P':   (170.8,  5.0),
+        'pP-P':  (3.9,    5.0),
+        'PP-P':  (19.3,   8.0),
+        'PPP-P': (36.1,  12.0),
+        'SS-S':  (19.0,   5.0),
+        'SSS-S': (42.9,   8.0),
+        'ScS-S': (342.8, 12.0),
+    },
+    'S0918a': {
+        'delta': 16.6,  'depth': 22.3,
+        'S-P':   (102.4,  5.0),
+        'PP-P':  (12.8,   8.0),
+        'PPP-P': (22.5,  12.0),
+        'SS-S':  (21.2,   5.0),
+        'SSS-S': (35.0,   8.0),
+    },
+    'S0976a': {
+        'delta': 144.0, 'depth': 30.0,
+        'SS-PP':  (854.4, 10.0),
+        'SKS-PP': (303.9, 10.0),
+    },
+    'S1000a': {
+        'delta': 125.9, 'depth': 0.0,
+        'SS-PP':        (749.0,   10.0),
+        'SKS-PP':       (339.3,   10.0),
+        'PP-PbdiffPcP': (180.65,  10.0),  
+    },
+    'S1094b': {
+        'delta': 58.5,  'depth': 0.0,
+        'S-P':  (343.0, 5.0),
+    },
+    'S1222a': {
+        'delta': 36.1,  'depth': 32.8,
+        'S-P':   (216.0,  5.0),
+        'ScS-S': (258.0, 12.0),
+    },
 }
 
 
@@ -320,91 +409,250 @@ def solidus_duncan2018(P_GPa):
     return float(result[0]) if scalar_input else result
 
 # ============================================================
-# Khan median
+# ★ STEP 1: solidus / liquidus with Mg# correction
 # ============================================================
 
-_KHAN_CACHE = None
+MG_DUNCAN_REF = 0.75   # reference Mg# for Duncan 2018
+PHI_OUTER_CORE = 0.30  # melt fraction threshold for outer-core marker (Pierru 2026)
 
-def compute_khan_median():
-    global _KHAN_CACHE
-    if _KHAN_CACHE is not None:
-        return _KHAN_CACHE
 
-    files = sorted(glob.glob(os.path.join(KHAN_MODEL_DIR, 'Model_*.txt')))
-    print(f"Loading {len(files)} Khan models...")
+def liquidus_ruedas2017(P_GPa):
+    """Ruedas & Breuer 2017 liquidus, returns K"""
+    return (2160.6 + 64.7109 * P_GPa
+            - 3.97463 * P_GPa**2
+            + 0.0957894 * P_GPa**3)
+
+
+def fe_correction_K(Mg_number, Mg_ref=MG_DUNCAN_REF):
+    """
+    Elkins-Tanton 2008: dT = -6 * (Fe - Fe_ref)
+    Fe# = 100 * (1 - Mg#)
+    """
+    Fe     = 100.0 * (1.0 - Mg_number)
+    Fe_ref = 100.0 * (1.0 - Mg_ref)
+    return -6.0 * (Fe - Fe_ref)
+
+
+def solidus_bml(P_GPa, Mg_number_bml):
+    """BML solidus = Duncan 2018 + Fe correction"""
+    return solidus_duncan2018(P_GPa) + fe_correction_K(Mg_number_bml)
+
+
+def liquidus_bml(P_GPa, Mg_number_bml):
+    """BML liquidus = Ruedas 2017 + Fe correction"""
+    return liquidus_ruedas2017(P_GPa) + fe_correction_K(Mg_number_bml)
+
+
+# ============================================================
+# ★ STEP 2: melt fraction and outer-core depth scan
+# ============================================================
+
+def compute_melt_fraction(T_K, P_GPa, Mg_number_bml):
+    """
+    φ = (T - T_sol) / (T_liq - T_sol), clipped to [0, 1]
+    """
+    T_sol = solidus_bml(P_GPa, Mg_number_bml)
+    T_liq = liquidus_bml(P_GPa, Mg_number_bml)
+    if T_liq <= T_sol:
+        T_liq = T_sol + 200.0
+    phi = (T_K - T_sol) / (T_liq - T_sol)
+    return float(np.clip(phi, 0.0, 1.0))
+
+
+def find_outer_core_depth(bml_P, bml_depth, T_bml, Mg_number_bml,
+                           phi_threshold=PHI_OUTER_CORE):
+    """
+    Scan BML from top to bottom.
+    Return depth (km) where φ first >= phi_threshold.
+    If never reached, return bottom depth.
+    """
+    for P, d in zip(bml_P, bml_depth):
+        phi = compute_melt_fraction(T_bml, P, Mg_number_bml)
+        if phi >= phi_threshold:
+            return d
+    return bml_depth[-1]
+
+
+# ============================================================
+# ★ STEP 3: Pierru 2026 velocity correction
+# ============================================================
+
+def apply_melt_correction_pierru(Vp, Vs, phi):
+    """
+    Pierru 2026 Fig S9 (seismic-frequency equivalent):
+      phi=0.00: dVp=0%,   dVs=0%
+      phi=0.10: dVp=10%,  dVs=20%
+      phi=0.20: dVp=17.5%,dVs=40%
+      phi>=0.30:dVp=20%,  dVs=100% (Vs=0)
+    """
+    if phi <= 0.0:
+        return Vp, Vs
+
+    phi_nodes = np.array([0.0,  0.10, 0.20, 0.30, 1.0])
+    dVp_nodes = np.array([0.0,  0.10, 0.175, 0.20, 0.20])
+    dVs_nodes = np.array([0.0,  0.20, 0.40,  1.00, 1.00])
+
+    dVp = float(np.interp(phi, phi_nodes, dVp_nodes))
+    dVs = float(np.interp(phi, phi_nodes, dVs_nodes))
+
+    return Vp * (1.0 - dVp), max(Vs * (1.0 - dVs), 0.0)
+
+# ============================================================
+# Samuel 2023 median model
+# ============================================================
+
+SAMUEL_DATA_DIR = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
+                   "Nature_Samuel_s41586-023-06601-8/"
+                   "METADATA_BML/DATA_FIG2/PANEL_B")
+
+SAMUEL_RHO_PROFILE_PATH = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
+                            "Nature_Samuel_s41586-023-06601-8/"
+                            "METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat")
+
+# ★ hardcoded from rho_profile.dat density jumps
+LSL_TOP_DEPTH  = 1574.6   # km  BML top  (solid mantle / BML interface)
+TRUE_CMB_DEPTH = 1743.3   # km  true CMB (BML / iron core interface)
+
+CMB_VS_THRESHOLD = 0.1    # km/s
+
+_SAMUEL_CACHE = None
+
+def compute_samuel_median():
+    """
+    Read all Samuel 2023 vp*.dat + vs*.dat models, compute median
+    crust, core profiles and lsl_top / true_cmb depths.
+
+    Format: col0 = velocity (m/s), col1 = radius (km)
+    Vs last 2 lines forced to 0 (inner-core placeholder artefact).
+
+    BML definition: from true_cmb_depth upward by BML_thickness km.
+    """
+    global _SAMUEL_CACHE
+    if _SAMUEL_CACHE is not None:
+        return _SAMUEL_CACHE
+
+    vp_files = sorted(glob.glob(os.path.join(SAMUEL_DATA_DIR, 'vp*.dat')))
+    print(f"Loading {len(vp_files)} Samuel models...")
 
     crust_z = np.linspace(0, 100, 200)
     core_z  = np.linspace(1500, MARS_RADIUS, 200)
 
     crust_vp_all = []; crust_vs_all = []; crust_rho_all = []
-    core_vp_all  = []; core_rho_all = []
-    lsl_top_depths  = []
+    core_vp_all  = []
+    bml_top_depths  = []
     true_cmb_depths = []
 
-    for fpath in files:
+    import re
+    for vp_path in vp_files:
+        # match vs file with same number
+        m = re.search(r'vp(\d+)\.dat', os.path.basename(vp_path))
+        if not m:
+            continue
+        sid = m.group(1)
+        vs_path = os.path.join(SAMUEL_DATA_DIR, f'vs{sid}.dat')
+        if not os.path.exists(vs_path):
+            continue
+
         try:
-            data  = np.loadtxt(fpath, comments='#')
-            depth = data[:, 0]; Vp = data[:, 1]
-            Vs    = data[:, 2]; rho = data[:, 3]
-            solid_mask  = Vs > 0.01
-            liquid_mask = Vs < 0.01
+            vp_data = np.loadtxt(vp_path)
+            vs_data = np.loadtxt(vs_path)
+
+            vp_ms  = vp_data[:, 0].copy()
+            vs_ms  = vs_data[:, 0].copy()
+            radius = vp_data[:, 1]
+
+            # ★ force last 2 lines Vs=0 (inner-core placeholder)
+            vs_ms[-2:] = 0.0
+
+            vp    = vp_ms / 1000.0   # m/s → km/s
+            vs    = vs_ms / 1000.0
+            depth = MARS_RADIUS - radius
+
+            # sort by depth ascending
+            sort_idx = np.argsort(depth)
+            depth = depth[sort_idx]
+            vp    = vp[sort_idx]
+            vs    = vs[sort_idx]
+
+            # Birch's law density estimate (no rho file)
+            rho = 0.32 * vp + 0.77
+
+            liquid_mask = vs < CMB_VS_THRESHOLD
+            solid_mask  = ~liquid_mask
+
             if solid_mask.sum() < 5 or liquid_mask.sum() < 5:
                 continue
 
-            lsl_top = depth[liquid_mask][0]
-            lsl_top_depths.append(lsl_top)
+            # lsl_top: first liquid point from surface downward
+            bml_top = depth[liquid_mask][0]
+            bml_top_depths.append(bml_top)
 
+            # true_cmb: biggest Vp jump within liquid region
             liq_depth = depth[liquid_mask]
-            liq_rho   = rho[liquid_mask]
-            drho      = np.diff(liq_rho)
-            ddepth    = np.diff(liq_depth)
-            disc_mask = (np.abs(ddepth) < 1.0) & (drho > 1.0)
-            if disc_mask.any():
-                best_idx = np.argmax(drho * disc_mask)
-                true_cmb = liq_depth[best_idx + 1]
-            else:
-                true_cmb = liq_depth[np.argmax(drho) + 1]
+            liq_vp    = vp[liquid_mask]
+            dvp       = np.abs(np.diff(liq_vp))
+            true_cmb  = liq_depth[np.argmax(dvp) + 1]
             true_cmb_depths.append(true_cmb)
 
-            sd = depth[solid_mask]; svp = Vp[solid_mask]
-            svs = Vs[solid_mask];   sr  = rho[solid_mask]
+            # crust: solid points above 100 km
+            sd = depth[solid_mask]
+            svp = vp[solid_mask]
+            svs = vs[solid_mask]
+            sr  = rho[solid_mask]
             if sd.max() > crust_z.max():
                 crust_vp_all.append(np.interp(crust_z, sd, svp))
                 crust_vs_all.append(np.interp(crust_z, sd, svs))
                 crust_rho_all.append(np.interp(crust_z, sd, sr))
 
+            # core: liquid points below true_cmb
             core_liq_mask = liquid_mask & (depth >= true_cmb)
             cd  = depth[core_liq_mask]
-            cvp = Vp[core_liq_mask]
+            cvp = vp[core_liq_mask]
             cr  = rho[core_liq_mask]
             if len(cd) > 0 and cd.max() >= core_z.max() * 0.9:
                 core_vp_all.append(np.interp(core_z, cd, cvp))
-                core_rho_all.append(np.interp(core_z, cd, cr))
 
-        except Exception:
+        except Exception as e:
+            print(f"  Warning: failed to load {sid}: {e}")
             continue
 
-    lsl_top_median  = float(np.median(lsl_top_depths))
-    true_cmb_median = float(np.median(true_cmb_depths))
-    print(f"  LSL top  (mantle/LSL interface): {lsl_top_median:.0f} km")
-    print(f"  True CMB (LSL/core  interface):  {true_cmb_median:.0f} km")
-    print(f"  LSL thickness (median):          "
-          f"{true_cmb_median - lsl_top_median:.0f} km")
+    print(f"  LSL top  (hardcoded): {LSL_TOP_DEPTH:.1f} km")
+    print(f"  True CMB (hardcoded): {TRUE_CMB_DEPTH:.1f} km")
+    print(f"  Samuel BML thickness: {TRUE_CMB_DEPTH - LSL_TOP_DEPTH:.1f} km")
+    print(f"  Crust models: {len(crust_vp_all)}  Core models: {len(core_vp_all)}")
 
-    _KHAN_CACHE = {
+    crust_vp_med  = np.nanmedian(crust_vp_all, axis=0)
+    crust_vs_med  = np.nanmedian(crust_vs_all, axis=0)
+    crust_rho_med = np.nanmedian(crust_rho_all, axis=0)
+    core_vp_med   = np.nanmedian(core_vp_all, axis=0)
+
+    # core rho from rho_profile.dat
+    try:
+        rho_data   = np.loadtxt(SAMUEL_RHO_PROFILE_PATH)
+        rho_all    = rho_data[:, 0]          # kg/m³
+        r_all      = rho_data[:, 1]          # km radius
+        depth_rho  = MARS_RADIUS - r_all
+        sort_r     = np.argsort(depth_rho)
+        depth_rho  = depth_rho[sort_r]
+        rho_si     = rho_all[sort_r] / 1000.0   # kg/m³ → g/cm³
+        core_rho_med = np.interp(core_z, depth_rho, rho_si)
+    except Exception as e:
+        print(f"  Warning: rho_profile.dat failed ({e}), using Birch's law")
+        core_rho_med = 0.32 * core_vp_med + 0.77
+
+    _SAMUEL_CACHE = {
         'crust_z':        crust_z,
-        'crust_vp':       np.nanmedian(crust_vp_all,  axis=0),
-        'crust_vs':       np.nanmedian(crust_vs_all,  axis=0),
-        'crust_rho':      np.nanmedian(crust_rho_all, axis=0),
+        'crust_vp':       crust_vp_med,
+        'crust_vs':       crust_vs_med,
+        'crust_rho':      crust_rho_med,
         'core_z':         core_z,
-        'core_vp':        np.nanmedian(core_vp_all,  axis=0),
+        'core_vp':        core_vp_med,
         'core_vs':        np.zeros(len(core_z)),
-        'core_rho':       np.nanmedian(core_rho_all, axis=0),
-        'lsl_top_depth':  lsl_top_median,
-        'true_cmb_depth': true_cmb_median,
-        'cmb_depth':      lsl_top_median,
+        'core_rho':       core_rho_med,
+        'bml_top_depth':  LSL_TOP_DEPTH,
+        'true_cmb_depth': TRUE_CMB_DEPTH,
     }
-    return _KHAN_CACHE
+    return _SAMUEL_CACHE
 
 # ============================================================
 # composition
@@ -690,22 +938,29 @@ def read_fort56(fort56_path):
     return read_fort56_full(fort56_path)
 
 
-def run_hefesto(params, run_dir):
+def run_hefesto(params, run_dir, P_bml_top=None):
     """
     Three-step HeFESTo run:
     Step 1: NPT @ (P_lit, T_lit)  → read S_lit
-    Step 2: NPT scan (6 pressure points, two NPT runs each, interpolate to find T where S=S_lit) → build adiabatic T(P)
+    Step 2: NPT scan → build adiabatic T(P) up to P_bml_top
     Step 3: iensem=-1 with ad.in  → full Vp/Vs/rho profile
- 
+
+    P_bml_top: pressure at BML top (GPa), computed dynamically from
+               pressure_mars(TRUE_CMB_DEPTH - BML_thickness).
+               Defines the bottom of the mantle HeFESTo run.
     Returns: (fort56_path, fort56_data)
-    Returns (None, None) on failure
     """
     p     = composition_from_params(params)
     O     = compute_oxygen(p)
     T_lit = p['T_lit']
     P_lit = p['P_lit']
- 
-    # ── Step 1: NPT single point @ (P_lit, T_lit) ───────────
+
+    # compute P_bml_top if not provided
+    if P_bml_top is None:
+        bml_thickness = params.get('BML_thickness', 168.7)
+        bml_top_km    = TRUE_CMB_DEPTH - bml_thickness
+        P_bml_top     = float(pressure_mars(bml_top_km))
+    print(f"    Mantle runs to P_bml_top = {P_bml_top:.2f} GPa")
     dir1  = os.path.join(run_dir, "s1_npt")
     line1 = f"{P_lit:.4f},{P_lit:.4f},1,{T_lit:.2f},{T_lit:.2f},0,0,0,0"
     fort56_1 = run_hefesto_single(dir1, make_control_lines(p, O, line1))
@@ -731,7 +986,10 @@ def run_hefesto(params, run_dir):
  
     # ── Step 2: NPT scan to build adiabatic temperature profile ────────────────────
     print(f"    Step 2: NPT scan...")
-    P_scan_pts     = np.array([P_lit, 9.0, 12.0, 15.0, 17.0, P_MAX_GPA])
+    # scan points up to P_bml_top (dynamic BML top pressure)
+    P_scan_fixed = np.array([9.0, 12.0, 15.0, 17.0])
+    P_scan_fixed = P_scan_fixed[P_scan_fixed < P_bml_top]
+    P_scan_pts   = np.concatenate([[P_lit], P_scan_fixed, [P_bml_top]])
     T_guess        = T_lit
     P_adiab_list   = [P_lit]
     T_adiab_list   = [T_lit]
@@ -815,7 +1073,7 @@ def run_hefesto(params, run_dir):
  
     # ── Step 3: iensem=-1, run full calculation with ad.in ──────────────
     dir3  = os.path.join(run_dir, "s3_final")
-    line3 = f"0,{P_MAX_GPA:.0f},50,0,0,0,-1,0,0"
+    line3 = f"0,{P_bml_top:.4f},50,0,0,0,-1,0,0"
     fort56_3 = run_hefesto_single(dir3, make_control_lines(p, O, line3),
                                   ad_in_content=ad_in)
     _cleanup_keep_key_files(dir3)
@@ -836,14 +1094,39 @@ def run_hefesto(params, run_dir):
     return fort56_3, data3
 
 
-def run_hefesto_bml(params, run_dir, P_top, P_bottom, T_bml, n_points=20):
-    p = composition_from_params(params)
+def run_hefesto_bml(params, run_dir, T_bml, T_mantle_bottom,
+                    true_cmb_depth, n_points=20):
+    """
+    BML defined from core upward:
+      BML bottom = true_cmb_depth (fixed, iron core top)
+      BML top    = true_cmb_depth - BML_thickness
+    Temperature: linear from T_mantle_bottom (top) to T_bml (bottom).
+    """
+    bml_thickness = params.get('BML_thickness', 168.7)   # km
+    Mg_number_bml = params['Mg#_bml']
+
+    # BML from core upward:
+    #   bottom = true_cmb_depth, top = true_cmb_depth - bml_thickness
+    bml_top_depth = true_cmb_depth - bml_thickness
+    P_bottom = float(pressure_mars(true_cmb_depth))
+    P_top    = float(pressure_mars(bml_top_depth))
+    P_top    = max(P_top, 5.0)   # safety floor
+
+    p = composition_from_params({
+        'Mg#':   Mg_number_bml,
+        'T_lit': T_mantle_bottom,   # use top temperature as reference
+        'P_lit': P_top,
+    })
     O = compute_oxygen(p)
 
     P_range = np.linspace(P_top, P_bottom, n_points)
-    ad_in   = "".join(
-        f"{P:.6f} 0.000000 {T_bml:.6f}\n"
-        for P in P_range
+
+    # ★ linear temperature profile: top = T_mantle_bottom, bottom = T_bml
+    T_range = np.linspace(T_mantle_bottom, T_bml, n_points)
+
+    ad_in = "".join(
+        f"{P:.6f} 0.000000 {T:.6f}\n"
+        for P, T in zip(P_range, T_range)
     )
 
     dir_bml = os.path.join(run_dir, "bml")
@@ -852,13 +1135,70 @@ def run_hefesto_bml(params, run_dir, P_top, P_bottom, T_bml, n_points=20):
                                  make_control_lines(p, O, line),
                                  ad_in_content=ad_in)
     _cleanup_keep_key_files(dir_bml)
-    return fort56
+
+    if fort56 is None:
+        return None
+
+    bml_raw = read_fort56_full(fort56)
+    if bml_raw is None:
+        return None
+
+    # compute depth from pressure
+    rho   = bml_raw['rho']
+    P_GPa = bml_raw['P_GPa']
+    dP    = np.diff(P_GPa) * 1e9
+    depth = np.zeros(len(P_GPa))
+    for i in range(len(dP)):
+        g_i        = gravity_mars(depth[i])
+        rho_si     = ((rho[i] + rho[i+1]) / 2) * 1000
+        depth[i+1] = depth[i] + dP[i] / (rho_si * g_i) / 1000.0
+
+    # ★ apply Pierru correction using each point's own temperature
+    Vp_solid = bml_raw['Vp']
+    Vs_solid = bml_raw['Vs']
+    T_actual = bml_raw['T_K']   # HeFESTo output temperature at each point
+    phi_arr  = np.zeros(len(P_GPa))
+    Vp_corr  = np.zeros(len(P_GPa))
+    Vs_corr  = np.zeros(len(P_GPa))
+    outer_core_depth_offset = depth[-1]   # default: bottom
+
+    for i in range(len(P_GPa)):
+        # use actual temperature from HeFESTo output
+        phi = compute_melt_fraction(float(T_actual[i]), P_GPa[i], Mg_number_bml)
+        phi_arr[i] = phi
+        Vp_corr[i], Vs_corr[i] = apply_melt_correction_pierru(
+            float(Vp_solid[i]), float(Vs_solid[i]), phi
+        )
+        if phi >= PHI_OUTER_CORE and outer_core_depth_offset == depth[-1]:
+            outer_core_depth_offset = depth[i]
+
+    print(f"    BML: thickness={bml_thickness:.0f} km  "
+          f"T_top={T_mantle_bottom:.0f}K  T_bot={T_bml:.0f}K  "
+          f"dT={T_bml - T_mantle_bottom:.0f}K  "
+          f"phi_top={phi_arr[0]:.3f}  phi_bot={phi_arr[-1]:.3f}  "
+          f"outer_core_offset={outer_core_depth_offset:.1f} km")
+
+    return {
+        'depth_km':                  depth,
+        'P_GPa':                     P_GPa,
+        'T_K':                       T_actual,
+        'Vp':                        Vp_corr,
+        'Vs':                        Vs_corr,
+        'rho':                       rho,
+        'phi':                       phi_arr,
+        'outer_core_depth_offset':   outer_core_depth_offset,
+    }
 
 # ============================================================
 # TauP
 # ============================================================
 
-def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
+def build_taup(fort56_data, model_name, samuel_cache, bml_data=None):
+    """
+    ★ STEP 5: outer-core marker written dynamically at phi=0.30 depth.
+    Above that depth: partial melt (Vs > 0, Pierru-corrected).
+    Below: fully molten (Vs = 0) + iron core merged as one outer-core.
+    """
     os.makedirs(TAUP_WORK_DIR, exist_ok=True)
     model_name = model_name.replace(".npz", "")
     npz_path   = os.path.join(TAUP_WORK_DIR, f'{model_name}.npz')
@@ -866,10 +1206,14 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
     if os.path.exists(npz_path):
         return TauPyModel(model=npz_path)
 
-    khan           = khan_cache
-    lsl_top_depth  = khan['lsl_top_depth']
-    true_cmb_depth = khan['true_cmb_depth']
-    mantle_bottom  = lsl_top_depth
+    true_cmb_depth = samuel_cache['true_cmb_depth']
+
+    # BML top is dynamic: from bml_data if available, else from samuel lsl_top
+    if bml_data is not None:
+        bml_top_depth = float(bml_data['depth_km'][0])
+    else:
+        bml_top_depth = samuel_cache['bml_top_depth']
+    mantle_bottom = bml_top_depth
 
     hef_depth = fort56_data['depth_km']
     hef_Vp    = fort56_data['Vp']
@@ -882,40 +1226,66 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
     man_Vs      = hef_Vs[mantle_mask]
     man_rho     = hef_rho[mantle_mask]
     if len(man_depth) == 0:
-        raise ValueError("Mantle depth range insufficient")
+        raise ValueError(f"Mantle depth range insufficient: "
+                     f"hef_depth={hef_depth[0]:.1f}–{hef_depth[-1]:.1f} km, "
+                     f"mantle_bottom={mantle_bottom:.1f} km")
 
     with open(nd_path, 'w') as f:
-        for d, vp, vs, r in zip(khan['crust_z'], khan['crust_vp'],
-                                 khan['crust_vs'], khan['crust_rho']):
+        # crust
+        for d, vp, vs, r in zip(samuel_cache['crust_z'], samuel_cache['crust_vp'],
+                                 samuel_cache['crust_vs'], samuel_cache['crust_rho']):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
         f.write("mantle\n")
+
+        # solid mantle
         for d, vp, vs, r in zip(man_depth, man_Vp, man_Vs, man_rho):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
 
         if bml_data is not None:
-            bml_depth = bml_data['depth_km']
+            bml_depth = bml_data['depth_km']   # absolute depths
             bml_vp    = bml_data['Vp']
+            bml_vs    = bml_data['Vs']
             bml_rho   = bml_data['rho']
-            bml_mask  = ((bml_depth >= mantle_bottom) &
-                         (bml_depth <= true_cmb_depth))
 
-            bml_vp_top  = float(bml_vp[bml_mask][0])
-            bml_rho_top = float(bml_rho[bml_mask][0])
+            # ★ outer_core_depth in absolute coordinates
+            outer_core_abs = bml_data.get('outer_core_depth_abs', bml_depth[-1])
 
-            f.write(f"{man_depth[-1]:.3f}  "
-                    f"{man_Vp[-1]:.4f}  {man_Vs[-1]:.4f}  {man_rho[-1]:.4f}\n")
-            f.write(f"{man_depth[-1]:.3f}  "
-                    f"{bml_vp_top:.4f}  0.0000  {bml_rho_top:.4f}\n")
+            bml_mask = (bml_depth >= mantle_bottom) & (bml_depth <= true_cmb_depth)
+
+            # partial melt region (Vs > 0, above outer_core_abs)
+            partial_mask = bml_mask & (bml_depth < outer_core_abs)
+            for d, vp, vs, r in zip(bml_depth[partial_mask],
+                                     bml_vp[partial_mask],
+                                     bml_vs[partial_mask],
+                                     bml_rho[partial_mask]):
+                f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
+
+            # ★ outer-core discontinuity at outer_core_abs
+            idx_oc = np.searchsorted(bml_depth, outer_core_abs)
+            idx_oc = min(idx_oc, len(bml_depth) - 1)
+
+            # discontinuity: same depth two lines + outer-core keyword (TauP .nd format)
+            f.write(f"{outer_core_abs:.3f}  "
+                    f"{bml_vp[idx_oc]:.4f}  "
+                    f"{bml_vs[idx_oc]:.4f}  "
+                    f"{bml_rho[idx_oc]:.4f}\n")
             f.write("outer-core\n")
-            bml_d = bml_depth[bml_mask]
-            bml_v = bml_vp[bml_mask]
-            bml_r = bml_rho[bml_mask]
-            for d, vp, r in zip(bml_d[1:], bml_v[1:], bml_r[1:]):
+            f.write(f"{outer_core_abs:.3f}  "
+                    f"{bml_vp[idx_oc]:.4f}  "
+                    f"0.0000  "
+                    f"{bml_rho[idx_oc]:.4f}\n")
+
+            # fully molten BML below outer_core_abs
+            fully_mask = bml_mask & (bml_depth > outer_core_abs)
+            for d, vp, r in zip(bml_depth[fully_mask],
+                                  bml_vp[fully_mask],
+                                  bml_rho[fully_mask]):
                 f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
 
-            core_z   = khan['core_z']
-            core_vp  = khan['core_vp']
-            core_rho = khan['core_rho']
+            # iron core
+            core_z   = samuel_cache['core_z']
+            core_vp  = samuel_cache['core_vp']
+            core_rho = samuel_cache['core_rho']
             mask     = core_z >= true_cmb_depth
             f.write(f"{true_cmb_depth:.3f}  "
                     f"{core_vp[mask][0]:.4f}  0.0000  "
@@ -924,10 +1294,12 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
                                  core_vp[mask][1:],
                                  core_rho[mask][1:]):
                 f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
+
         else:
-            core_z   = khan['core_z']
-            core_vp  = khan['core_vp']
-            core_rho = khan['core_rho']
+            # no BML: CMB at true_cmb_depth
+            core_z   = samuel_cache['core_z']
+            core_vp  = samuel_cache['core_vp']
+            core_rho = samuel_cache['core_rho']
             mask     = core_z >= true_cmb_depth
 
             f.write(f"{man_depth[-1]:.3f}  "
@@ -947,14 +1319,19 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
 # Moment of Inertia
 # ============================================================
 
-def compute_mass_and_moi(fort56_data, khan_cache, bml_data=None):
-    R                = MARS_RADIUS_M
-    lsl_top_km       = khan_cache['lsl_top_depth']
-    true_cmb_km      = khan_cache['true_cmb_depth']
-    mantle_bottom_km = lsl_top_km
+def compute_mass_and_moi(fort56_data, samuel_cache, bml_data=None):
+    R            = MARS_RADIUS_M
+    true_cmb_km  = samuel_cache['true_cmb_depth']
 
-    crust_z      = khan_cache['crust_z']
-    crust_rho    = khan_cache['crust_rho']
+    # BML top is dynamic: from bml_data if available, else from samuel lsl_top
+    if bml_data is not None:
+        bml_top_km = float(bml_data['depth_km'][0])
+    else:
+        bml_top_km = samuel_cache['bml_top_depth']
+    mantle_bottom_km = bml_top_km
+
+    crust_z      = samuel_cache['crust_z']
+    crust_rho    = samuel_cache['crust_rho']
     crust_mask   = crust_z <= 100.0
     crust_r      = (R - crust_z[crust_mask] * 1000)
     crust_rho_si = crust_rho[crust_mask] * 1000
@@ -976,8 +1353,8 @@ def compute_mass_and_moi(fort56_data, khan_cache, bml_data=None):
         bml_r      = np.array([])
         bml_rho_si = np.array([])
 
-    core_z      = khan_cache['core_z']
-    core_rho    = khan_cache['core_rho']
+    core_z      = samuel_cache['core_z']
+    core_rho    = samuel_cache['core_rho']
     core_mask   = core_z >= true_cmb_km
     core_r      = (R - core_z[core_mask] * 1000)
     core_rho_si = core_rho[core_mask] * 1000
@@ -1006,8 +1383,12 @@ def compute_solidus_penalty(fort56_data, params):
     T_prof = fort56_data.get('T_profile', None)
 
     if P_prof is not None and T_prof is not None:
-        P_bml_top   = P_BML_TOP
-        P_lit       = params['P_lit']
+        P_lit         = params['P_lit']
+        bml_thickness = params.get('BML_thickness', 168.7)
+        bml_top_km    = TRUE_CMB_DEPTH - bml_thickness
+        # ★ use pressure_mars for accurate P at BML top
+        P_bml_top = float(pressure_mars(bml_top_km))
+        # P_prof and T_prof are both in pressure space (P_full, T_full)
         mantle_mask = (P_prof >= P_lit) & (P_prof <= P_bml_top)
         P_m = P_prof[mantle_mask]
         T_m = T_prof[mantle_mask]
@@ -1020,14 +1401,8 @@ def compute_solidus_penalty(fort56_data, params):
                 print(f"    Mantle solidus penalty = {mantle_excess:.4f}")
                 penalty += mantle_excess
 
-    if params is not None:
-        T_bml     = params['T_bml']
-        T_sol_bml = float(solidus_duncan2018(P_BML_BOTTOM))
-        if T_bml < T_sol_bml:
-            bml_pen = (T_sol_bml - T_bml) / 100.0
-            print(f"    BML solidus penalty = {bml_pen:.4f} "
-                  f"(T_bml={T_bml:.0f}K < T_sol={T_sol_bml:.0f}K)")
-            penalty += bml_pen
+    # BML solidus penalty removed:
+    # we do not force BML to be molten — the data decides whether it exists.
 
     return penalty
 
@@ -1040,39 +1415,51 @@ def _diff(times, a, b):
 
 
 def compute_misfit(taup_model, obs_dataset, fort56_data,
-                   khan_cache, bml_data=None, params=None):
+                   samuel_cache, bml_data=None, params=None):
 
     tt_total = 0.0
     tt_n     = 0
-    phases   = ['P','S','pP','sP','PP','PPP','SS','SSS','sS','ScS','SKS']
+
+    # ★ add Pdiff for S1000a (PP-PbdiffPcP constraint)
+    phases_standard   = ['P', 'S', 'pP', 'sP', 'PP', 'PPP',
+                         'SS', 'SSS', 'sS', 'ScS', 'SKS']
+    phases_with_pdiff = phases_standard + ['Pdiff']
 
     for event, obs in obs_dataset.items():
         delta = obs['delta']
         depth = obs.get('depth', 10.0)
+
+        phase_list = phases_with_pdiff if event == 'S1000a' else phases_standard
+
         try:
             arrivals = taup_model.get_travel_times(
                 source_depth_in_km=depth,
                 distance_in_degree=delta,
-                phase_list=phases)
-        except Exception:
+                phase_list=phase_list)
+            print(f"    {event}: delta={delta:.1f} arrivals={len(arrivals)}")
+        except Exception as e:
+            print(f"    {event}: FAILED {e}")
             continue
+
         times = {}
         for a in arrivals:
             if a.name not in times:
                 times[a.name] = a.time
 
         pred = {
-            'S-P':    _diff(times, 'S',   'P'),
-            'pP-P':   _diff(times, 'pP',  'P'),
-            'sP-P':   _diff(times, 'sP',  'P'),
-            'PP-P':   _diff(times, 'PP',  'P'),
-            'PPP-P':  _diff(times, 'PPP', 'P'),
-            'sS-S':   _diff(times, 'sS',  'S'),
-            'SS-S':   _diff(times, 'SS',  'S'),
-            'SSS-S':  _diff(times, 'SSS', 'S'),
-            'ScS-S':  _diff(times, 'ScS', 'S'),
-            'SS-PP':  _diff(times, 'SS',  'PP'),
-            'SKS-PP': _diff(times, 'SKS', 'PP'),
+            'S-P':           _diff(times, 'S',    'P'),
+            'pP-P':          _diff(times, 'pP',   'P'),
+            'sP-P':          _diff(times, 'sP',   'P'),
+            'PP-P':          _diff(times, 'PP',   'P'),
+            'PPP-P':         _diff(times, 'PPP',  'P'),
+            'sS-S':          _diff(times, 'sS',   'S'),
+            'SS-S':          _diff(times, 'SS',   'S'),
+            'SSS-S':         _diff(times, 'SSS',  'S'),
+            'ScS-S':         _diff(times, 'ScS',  'S'),
+            'SS-PP':         _diff(times, 'SS',   'PP'),
+            'SKS-PP':        _diff(times, 'SKS',  'PP'),
+            # ★ PP - PbdiffPcP: TauPy Pdiff = PbdiffPcP in BML models
+            'PP-PbdiffPcP':  _diff(times, 'PP',   'Pdiff'),
         }
 
         for phase, obs_val in obs.items():
@@ -1100,7 +1487,7 @@ def compute_misfit(taup_model, obs_dataset, fort56_data,
     if not np.isfinite(tt_misfit):
         tt_misfit = 999.0
 
-    M_pred, moi_pred = compute_mass_and_moi(fort56_data, khan_cache,
+    M_pred, moi_pred = compute_mass_and_moi(fort56_data, samuel_cache,
                                              bml_data=bml_data)
     mass_misfit = abs(MARS_MASS_OBS - M_pred) / MARS_MASS_SIGMA
     moi_misfit  = abs(MOI_OBS - moi_pred)     / MOI_SIGMA
@@ -1139,85 +1526,100 @@ def compute_misfit(taup_model, obs_dataset, fort56_data,
 # forward model
 # ============================================================
 
-def forward(params, run_dir, model_name, khan_cache,
-            skip_bml_density_check=False):
+def forward(params, run_dir, model_name, samuel_cache):
 
-    fort56, fort56_data = run_hefesto(params, run_dir)
+    # ★ compute BML top depth and pressure before running HeFESTo
+    true_cmb_depth = samuel_cache['true_cmb_depth']
+    bml_thickness  = params.get('BML_thickness', 168.7)
+    bml_top_km     = true_cmb_depth - bml_thickness
+    P_bml_top      = float(pressure_mars(bml_top_km))
+    print(f"    BML top={bml_top_km:.0f} km  P_bml_top={P_bml_top:.2f} GPa")
+
+    fort56, fort56_data = run_hefesto(params, run_dir, P_bml_top=P_bml_top)
     if fort56 is None or fort56_data is None:
-        return None, None, None
+        return None, None, None, None, None
 
-    fort56_bml_path = run_hefesto_bml(
-        params   = {'T_lit': params['T_bml'],
-                    'P_lit': P_BML_TOP,
-                    'Mg#':   params['Mg#_bml']},
-        run_dir  = run_dir,
-        P_top    = P_BML_TOP,
-        P_bottom = P_BML_BOTTOM,
-        T_bml    = params['T_bml'],
+    # ★ extract T_mantle_bottom from isentropic profile at BML top
+    # T_profile and P_profile are both in pressure space (from run_hefesto)
+    T_profile = fort56_data.get('T_profile', None)
+    P_profile = fort56_data.get('P_profile', None)
+    if T_profile is not None and P_profile is not None:
+        # P_bml_top already computed above — interpolate in pressure space
+        T_mantle_bottom = float(np.interp(P_bml_top, P_profile, T_profile))
+    else:
+        T_mantle_bottom = float(fort56_data['T_K'][-1])
+    print(f"    T_mantle_bottom = {T_mantle_bottom:.1f} K @ P={P_bml_top:.2f} GPa")
+
+    # ★ run BML with temperature gradient from T_mantle_bottom to T_bml
+    bml_raw = run_hefesto_bml(
+        params          = params,
+        run_dir         = run_dir,
+        T_bml           = params['T_bml'],
+        T_mantle_bottom = T_mantle_bottom,
+        true_cmb_depth  = true_cmb_depth,
     )
 
     bml_data = None
-    if fort56_bml_path is not None:
-        bml_raw = read_fort56_full(fort56_bml_path)
-        if bml_raw is not None:
-            bml_top_km = khan_cache['lsl_top_depth']
-            bml_raw['depth_km'] = (bml_raw['depth_km']
-                                   - bml_raw['depth_km'][0] + bml_top_km)
+    if bml_raw is not None:
+        # bml_top_km already computed above as true_cmb_depth - bml_thickness
 
-            rho_mantle_bottom = float(fort56_data['rho'][-1])
-            rho_bml_top       = float(bml_raw['rho'][0])
-            rho_bml_bottom    = float(bml_raw['rho'][-1])
+        # convert relative depth to absolute
+        bml_raw['depth_km'] = (bml_raw['depth_km']
+                               - bml_raw['depth_km'][0] + bml_top_km)
 
-            core_z    = khan_cache['core_z']
-            core_rho  = khan_cache['core_rho']
-            true_cmb  = khan_cache['true_cmb_depth']
-            core_mask = core_z >= true_cmb
-            rho_core_top = float(core_rho[core_mask][0]) if core_mask.any() else 6.4
+        # ★ compute absolute outer_core_depth
+        outer_core_offset = bml_raw['outer_core_depth_offset']
+        bml_raw['outer_core_depth_abs'] = bml_top_km + outer_core_offset
 
-            upper_contrast = rho_bml_top  - rho_mantle_bottom
-            lower_contrast = rho_core_top - rho_bml_bottom
+        rho_mantle_bottom = float(fort56_data['rho'][-1])
+        rho_bml_top       = float(bml_raw['rho'][0])
+        rho_bml_bottom    = float(bml_raw['rho'][-1])
 
-            print(f"    BML density: mantle_bot={rho_mantle_bottom:.4f}  "
-                  f"bml_top={rho_bml_top:.4f}  "
-                  f"bml_bot={rho_bml_bottom:.4f}  "
-                  f"core_top={rho_core_top:.4f}")
-            print(f"    Upper contrast={upper_contrast:+.4f}  "
-                  f"Lower contrast={lower_contrast:+.4f}")
+        core_z    = samuel_cache['core_z']
+        core_rho  = samuel_cache['core_rho']
+        true_cmb  = samuel_cache['true_cmb_depth']
+        core_mask = core_z >= true_cmb
+        rho_core_top = float(core_rho[core_mask][0]) if core_mask.any() else 6.4
 
-            if upper_contrast <= 0 and not skip_bml_density_check:
-                print(f"    BML REJECTED: upper interface unstable")
-                return 999.0, 1, {
-                    'tt': 999.0, 'mass': 999.0, 'moi': 999.0,
-                    'solidus': 0.0,
-                    'upper_contrast': upper_contrast,
-                    'lower_contrast': lower_contrast,
-                }
+        upper_contrast = rho_bml_top  - rho_mantle_bottom
+        lower_contrast = rho_core_top - rho_bml_bottom
 
-            if lower_contrast <= 0 and not skip_bml_density_check:
-                print(f"    BML REJECTED: lower interface unstable")
-                return 999.0, 1, {
-                    'tt': 999.0, 'mass': 999.0, 'moi': 999.0,
-                    'solidus': 0.0,
-                    'upper_contrast': upper_contrast,
-                    'lower_contrast': lower_contrast,
-                }
+        print(f"    BML density: mantle_bot={rho_mantle_bottom:.4f}  "
+              f"bml_top={rho_bml_top:.4f}  "
+              f"bml_bot={rho_bml_bottom:.4f}  "
+              f"core_top={rho_core_top:.4f}")
+        print(f"    Upper contrast={upper_contrast:+.4f}  "
+              f"Lower contrast={lower_contrast:+.4f}")
+        print(f"    outer_core_depth = {bml_raw['outer_core_depth_abs']:.1f} km")
 
-            bml_data = bml_raw
-            bml_data['upper_contrast'] = upper_contrast
-            bml_data['lower_contrast'] = lower_contrast
+        if upper_contrast <= 0 :
+            print(f"    WARNING: upper interface unstable ({upper_contrast:+.4f})")
+
+        if lower_contrast <= 0 :
+            print(f"    WARNING: lower interface unstable ({lower_contrast:+.4f})")
+
+        bml_data = bml_raw
+        bml_data['upper_contrast'] = upper_contrast
+        bml_data['lower_contrast'] = lower_contrast
 
     try:
         taup_model = build_taup(fort56_data, model_name,
-                                khan_cache, bml_data=bml_data)
+                                samuel_cache, bml_data=bml_data)
     except Exception as e:
         print(f"    TauP failed: {e}")
-        return None, None, None
+        return None, None, None, None, None
 
+    # ★ use SAMUEL_DATA instead of KHAN_DATA
     misfit, n_data, components = compute_misfit(
-        taup_model, KHAN_DATA, fort56_data, khan_cache,
+        taup_model, SAMUEL_DATA, fort56_data, samuel_cache,
         bml_data=bml_data, params=params)
 
-    return misfit, n_data, components
+    if components is not None and bml_data is not None:
+        components['upper_contrast'] = bml_data.get('upper_contrast')
+        components['lower_contrast'] = bml_data.get('lower_contrast')
+
+    # ★ fix 1+2: return fort56_data as 4th value (same as nGibbs version)
+    return misfit, n_data, components, fort56_data, bml_data
 
 # ============================================================
 # MCMC
@@ -1240,10 +1642,14 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     os.makedirs(chain_dir, exist_ok=True)
 
     load_gravity_profile()
-    khan_cache = compute_khan_median()
+    samuel_cache = compute_samuel_median()
 
     rng     = np.random.default_rng(42 + chain_id)
     current = start_params.copy() if start_params else START_PARAMS.copy()
+
+    # ★ backward compatibility: ensure BML_thickness exists
+    if 'BML_thickness' not in current:
+        current['BML_thickness'] = 150.0
 
     chain_file = os.path.join(chain_dir, "chain.json")
     chain      = []
@@ -1252,6 +1658,9 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             chain = json.load(f)
         if chain:
             current = chain[-1]['params']
+            # ★ backward compatibility
+            if 'BML_thickness' not in current:
+                current['BML_thickness'] = 150.0
             print(f"Chain {chain_id}: resuming from step {len(chain)}")
 
     step_start   = len(chain)
@@ -1296,9 +1705,9 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                       f"T_bml={trial['T_bml']:.1f}  "
                       f"Mg#_bml={trial['Mg#_bml']:.3f}")
 
-            current_misfit, _, current_components = forward(
-                trial, run_dir, model_name, khan_cache,
-                skip_bml_density_check=True)
+            current_misfit, _, current_components, _, _ = forward(
+                trial, run_dir, model_name, samuel_cache,
+                )
 
             if current_misfit is not None and np.isfinite(current_misfit):
                 current = trial
@@ -1324,12 +1733,15 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         run_dir    = os.path.join(chain_dir, f"step_{step+1:05d}")
         model_name = f"mcmc_{prefix}_c{chain_id:02d}_s{step+1:05d}"
 
-        proposed_misfit, n_data, components = forward(
-            proposed, run_dir, model_name, khan_cache)
+        # ★ fix 1+2: receive 4 values including fort56_data
+        proposed_misfit, n_data, components, fort56_data, bml_data  = forward(
+            proposed, run_dir, model_name, samuel_cache)
 
         if proposed_misfit is None or proposed_misfit >= 990.0:
             accepted        = False
             proposed_misfit = 999.0
+            fort56_data     = None
+            bml_data        = None
             components      = {
                 'tt': 999.0, 'mass': 999.0,
                 'moi': 999.0, 'solidus': 0.0,
@@ -1350,29 +1762,34 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             current_components = components
             accept_count      += 1
 
-        if os.path.isdir(run_dir):
-            for sub in list(os.listdir(run_dir)):
-                sub_path = os.path.join(run_dir, sub)
-                if sub in {'s3_final', 'bml'}:
-                    if os.path.isdir(sub_path):
-                        for fname in list(os.listdir(sub_path)):
-                            if fname not in {'fort.56', 'ad.in', 'control'}:
-                                fp = os.path.join(sub_path, fname)
-                                try:
-                                    if os.path.isfile(fp):
-                                        os.remove(fp)
-                                    elif os.path.isdir(fp):
-                                        shutil.rmtree(fp, ignore_errors=True)
-                                except Exception:
-                                    pass
-                else:
-                    try:
-                        if os.path.isfile(sub_path):
-                            os.remove(sub_path)
-                        elif os.path.isdir(sub_path):
-                            shutil.rmtree(sub_path, ignore_errors=True)
-                    except Exception:
-                        pass
+            # ★ fix 3: save npz when accepted (same as nGibbs version)
+            if fort56_data is not None:
+                npz_dict = dict(
+                    # ── mantle (s3_final, no Pierru correction needed) ──
+                    depth_km = fort56_data['depth_km'],
+                    Vp       = fort56_data['Vp'],
+                    Vs       = fort56_data['Vs'],
+                    rho      = fort56_data['rho'],
+                    T_K      = fort56_data['T_K'],
+                    P_GPa    = fort56_data['P_GPa'],
+                )
+                if bml_data is not None:
+                    # ── BML (Pierru-corrected Vp/Vs, phi included) ──
+                    npz_dict.update(dict(
+                        bml_depth_km             = bml_data['depth_km'],
+                        bml_Vp                   = bml_data['Vp'],    # Pierru-corrected
+                        bml_Vs                   = bml_data['Vs'],    # Pierru-corrected, 0 where phi>=0.30
+                        bml_rho                  = bml_data['rho'],
+                        bml_T_K                  = bml_data['T_K'],
+                        bml_P_GPa                = bml_data['P_GPa'],
+                        bml_phi                  = bml_data['phi'],   # melt fraction per point
+                        bml_outer_core_depth_abs = np.array(
+                            [bml_data['outer_core_depth_abs']]),      # scalar → 1-element array
+                    ))
+                np.savez(
+                    os.path.join(chain_dir, f"profile_s{step+1:05d}.npz"),
+                    **npz_dict,
+                )
 
         elapsed     = (datetime.now() - t0).total_seconds()
         accept_rate = accept_count / (step - step_start + 1) * 100
@@ -1398,14 +1815,11 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             'accept_rate':    accept_rate,
         })
 
-        if (step + 1) % 10 == 0:
-            with open(chain_file, 'w') as f:
-                json.dump(chain, f, indent=2)
-            print(f"  [Saved {prefix}_{chain_id:02d}, "
-                  f"total {len(chain)} steps]")
-
-    with open(chain_file, 'w') as f:
-        json.dump(chain, f, indent=2)
+        # ★ fix 4: save chain.json every step
+        with open(chain_file, 'w') as f:
+            json.dump(chain, f, indent=2)
+        print(f"  [Saved {prefix}_{chain_id:02d}, "
+              f"total {len(chain)} steps]")
 
     print(f"\nChain {chain_id} complete!")
     print(f"  Total steps:       {step_start + n_steps}")
@@ -1418,16 +1832,47 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--chain',  type=int,  default=0)
-    parser.add_argument('--steps',  type=int,  default=100)
-    parser.add_argument('--test',   action='store_true')
-    parser.add_argument('--prefix', type=str,  default='chain')
+    parser.add_argument('--chain',        type=int,  default=0)
+    parser.add_argument('--steps',        type=int,  default=100)
+    parser.add_argument('--test',         action='store_true')
+    parser.add_argument('--prefix',       type=str,  default='chain')
+    parser.add_argument('--random_start', action='store_true',
+                        help='Start from a random point within the prior')
+    parser.add_argument('--start',        type=str,  default=None,
+                        help='JSON string or path to JSON file with start params')
     args = parser.parse_args()
 
     os.makedirs(MCMC_DIR, exist_ok=True)
 
+    # ★ fix 5: determine starting parameters
+    start_params = None
+
+    if args.start is not None:
+        try:
+            start_params = json.loads(args.start)
+        except json.JSONDecodeError:
+            with open(args.start) as _f:
+                start_params = json.load(_f)
+        missing = [k for k in PRIOR if k not in start_params]
+        if missing:
+            raise ValueError(f"--start is missing parameters: {missing}")
+        print(f"[start] Using specified start params: {start_params}")
+
+    elif args.random_start:
+        rng_init = np.random.default_rng(args.chain)
+        start_params = {
+            k: float(rng_init.uniform(lo, hi))
+            for k, (lo, hi) in PRIOR.items()
+        }
+        print(f"[start] random_start chain={args.chain}: {start_params}")
+
+    else:
+        print(f"[start] Using default START_PARAMS: {START_PARAMS}")
+
     if args.test:
         print("Test mode: running 1 step")
-        run_mcmc(chain_id=0, n_steps=1, prefix=args.prefix)
+        run_mcmc(chain_id=0, n_steps=1, prefix=args.prefix,
+                 start_params=start_params)
     else:
-        run_mcmc(chain_id=args.chain, n_steps=args.steps, prefix=args.prefix)
+        run_mcmc(chain_id=args.chain, n_steps=args.steps,
+                 prefix=args.prefix, start_params=start_params)

@@ -1226,7 +1226,9 @@ def build_taup(fort56_data, model_name, samuel_cache, bml_data=None):
     man_Vs      = hef_Vs[mantle_mask]
     man_rho     = hef_rho[mantle_mask]
     if len(man_depth) == 0:
-        raise ValueError("Mantle depth range insufficient")
+        raise ValueError(f"Mantle depth range insufficient: "
+                     f"hef_depth={hef_depth[0]:.1f}–{hef_depth[-1]:.1f} km, "
+                     f"mantle_bottom={mantle_bottom:.1f} km")
 
     with open(nd_path, 'w') as f:
         # crust
@@ -1536,7 +1538,7 @@ def forward(params, run_dir, model_name, samuel_cache,
 
     fort56, fort56_data = run_hefesto(params, run_dir, P_bml_top=P_bml_top)
     if fort56 is None or fort56_data is None:
-        return None, None, None, None
+        return None, None, None, None, None
 
     # ★ extract T_mantle_bottom from isentropic profile at BML top
     # T_profile and P_profile are both in pressure space (from run_hefesto)
@@ -1618,7 +1620,7 @@ def forward(params, run_dir, model_name, samuel_cache,
                                 samuel_cache, bml_data=bml_data)
     except Exception as e:
         print(f"    TauP failed: {e}")
-        return None, None, None, None
+        return None, None, None, None, None
 
     # ★ use SAMUEL_DATA instead of KHAN_DATA
     misfit, n_data, components = compute_misfit(
@@ -1630,7 +1632,7 @@ def forward(params, run_dir, model_name, samuel_cache,
         components['lower_contrast'] = bml_data.get('lower_contrast')
 
     # ★ fix 1+2: return fort56_data as 4th value (same as nGibbs version)
-    return misfit, n_data, components, fort56_data
+    return misfit, n_data, components, fort56_data, bml_data
 
 # ============================================================
 # MCMC
@@ -1716,7 +1718,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                       f"T_bml={trial['T_bml']:.1f}  "
                       f"Mg#_bml={trial['Mg#_bml']:.3f}")
 
-            current_misfit, _, current_components, _ = forward(
+            current_misfit, _, current_components, _, _ = forward(
                 trial, run_dir, model_name, samuel_cache,
                 skip_bml_density_check=True)
 
@@ -1745,13 +1747,14 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         model_name = f"mcmc_{prefix}_c{chain_id:02d}_s{step+1:05d}"
 
         # ★ fix 1+2: receive 4 values including fort56_data
-        proposed_misfit, n_data, components, fort56_data = forward(
+        proposed_misfit, n_data, components, fort56_data, bml_data  = forward(
             proposed, run_dir, model_name, samuel_cache)
 
         if proposed_misfit is None or proposed_misfit >= 990.0:
             accepted        = False
             proposed_misfit = 999.0
             fort56_data     = None
+            bml_data        = None
             components      = {
                 'tt': 999.0, 'mass': 999.0,
                 'moi': 999.0, 'solidus': 0.0,

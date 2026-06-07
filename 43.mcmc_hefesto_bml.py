@@ -1526,8 +1526,7 @@ def compute_misfit(taup_model, obs_dataset, fort56_data,
 # forward model
 # ============================================================
 
-def forward(params, run_dir, model_name, samuel_cache,
-            skip_bml_density_check=False):
+def forward(params, run_dir, model_name, samuel_cache):
 
     # ★ compute BML top depth and pressure before running HeFESTo
     true_cmb_depth = samuel_cache['true_cmb_depth']
@@ -1593,23 +1592,11 @@ def forward(params, run_dir, model_name, samuel_cache,
               f"Lower contrast={lower_contrast:+.4f}")
         print(f"    outer_core_depth = {bml_raw['outer_core_depth_abs']:.1f} km")
 
-        if upper_contrast <= 0 and not skip_bml_density_check:
-            print(f"    BML REJECTED: upper interface unstable")
-            return 999.0, 1, {
-                'tt': 999.0, 'mass': 999.0, 'moi': 999.0,
-                'solidus': 0.0,
-                'upper_contrast': upper_contrast,
-                'lower_contrast': lower_contrast,
-            }, None
+        if upper_contrast <= 0 :
+            print(f"    WARNING: upper interface unstable ({upper_contrast:+.4f})")
 
-        if lower_contrast <= 0 and not skip_bml_density_check:
-            print(f"    BML REJECTED: lower interface unstable")
-            return 999.0, 1, {
-                'tt': 999.0, 'mass': 999.0, 'moi': 999.0,
-                'solidus': 0.0,
-                'upper_contrast': upper_contrast,
-                'lower_contrast': lower_contrast,
-            }, None
+        if lower_contrast <= 0 :
+            print(f"    WARNING: lower interface unstable ({lower_contrast:+.4f})")
 
         bml_data = bml_raw
         bml_data['upper_contrast'] = upper_contrast
@@ -1720,7 +1707,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
 
             current_misfit, _, current_components, _, _ = forward(
                 trial, run_dir, model_name, samuel_cache,
-                skip_bml_density_check=True)
+                )
 
             if current_misfit is not None and np.isfinite(current_misfit):
                 current = trial

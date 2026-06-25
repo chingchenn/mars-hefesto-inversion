@@ -319,93 +319,6 @@ def solidus_duncan2018(P_GPa):
     return float(result[0]) if scalar_input else result
 
 # ============================================================
-# Khan median
-# ============================================================
-
-_KHAN_CACHE = None
-
-def compute_khan_median():
-    global _KHAN_CACHE
-    if _KHAN_CACHE is not None:
-        return _KHAN_CACHE
-
-    files = sorted(glob.glob(os.path.join(KHAN_MODEL_DIR, 'Model_*.txt')))
-    print(f"Loading {len(files)} Khan models...")
-
-    crust_z = np.linspace(0, 200, 200)
-    core_z  = np.linspace(1500, MARS_RADIUS, 200)
-
-    crust_vp_all = []; crust_vs_all = []; crust_rho_all = []
-    core_vp_all  = []; core_rho_all = []
-    lsl_top_depths  = []
-    true_cmb_depths = []
-
-    for fpath in files:
-        try:
-            data  = np.loadtxt(fpath, comments='#')
-            depth = data[:, 0]; Vp = data[:, 1]
-            Vs    = data[:, 2]; rho = data[:, 3]
-            solid_mask  = Vs > 0.01
-            liquid_mask = Vs < 0.01
-            if solid_mask.sum() < 5 or liquid_mask.sum() < 5:
-                continue
-
-            lsl_top = depth[liquid_mask][0]
-            lsl_top_depths.append(lsl_top)
-
-            liq_depth = depth[liquid_mask]
-            liq_rho   = rho[liquid_mask]
-            drho      = np.diff(liq_rho)
-            ddepth    = np.diff(liq_depth)
-            disc_mask = (np.abs(ddepth) < 1.0) & (drho > 1.0)
-            if disc_mask.any():
-                best_idx = np.argmax(drho * disc_mask)
-                true_cmb = liq_depth[best_idx + 1]
-            else:
-                true_cmb = liq_depth[np.argmax(drho) + 1]
-            true_cmb_depths.append(true_cmb)
-
-            sd = depth[solid_mask]; svp = Vp[solid_mask]
-            svs = Vs[solid_mask];   sr  = rho[solid_mask]
-            if sd.max() > crust_z.max():
-                crust_vp_all.append(np.interp(crust_z, sd, svp))
-                crust_vs_all.append(np.interp(crust_z, sd, svs))
-                crust_rho_all.append(np.interp(crust_z, sd, sr))
-
-            core_liq_mask = liquid_mask & (depth >= true_cmb)
-            cd  = depth[core_liq_mask]
-            cvp = Vp[core_liq_mask]
-            cr  = rho[core_liq_mask]
-            if len(cd) > 0 and cd.max() >= core_z.max() * 0.9:
-                core_vp_all.append(np.interp(core_z, cd, cvp))
-                core_rho_all.append(np.interp(core_z, cd, cr))
-
-        except Exception:
-            continue
-
-    lsl_top_median  = float(np.median(lsl_top_depths))
-    true_cmb_median = float(np.median(true_cmb_depths))
-    print(f"  LSL top  (mantle/LSL interface): {lsl_top_median:.0f} km")
-    print(f"  True CMB (LSL/core  interface):  {true_cmb_median:.0f} km")
-    print(f"  LSL thickness (median):          "
-          f"{true_cmb_median - lsl_top_median:.0f} km")
-
-    _KHAN_CACHE = {
-        'crust_z':        crust_z,
-        'crust_vp':       np.nanmedian(crust_vp_all,  axis=0),
-        'crust_vs':       np.nanmedian(crust_vs_all,  axis=0),
-        'crust_rho':      np.nanmedian(crust_rho_all, axis=0),
-        'core_z':         core_z,
-        'core_vp':        np.nanmedian(core_vp_all,  axis=0),
-        'core_vs':        np.zeros(len(core_z)),
-        'core_rho':       np.nanmedian(core_rho_all, axis=0),
-        'lsl_top_depth':  lsl_top_median,
-        'true_cmb_depth': true_cmb_median,
-        'cmb_depth':      lsl_top_median,
-    }
-    return _KHAN_CACHE
-
-# ============================================================
 # composition
 # ============================================================
 
@@ -1447,16 +1360,53 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--chain',  type=int,  default=0)
-    parser.add_argument('--steps',  type=int,  default=100)
-    parser.add_argument('--test',   action='store_true')
-    parser.add_argument('--prefix', type=str,  default='chain')
+    parser.add_argument('--chain',        type=int,  default=0)
+    parser.add_argument('--steps',        type=int,  default=100)
+    parser.add_argument('--test',         action='store_true')
+    parser.add_argument('--prefix',       type=str,  default='chain')
+    parser.add_argument('--random_start', action='store_true',
+                        help='Start each chain from a random point within the prior '
+                             '(seed=chain_id). Useful for exploring different regions.')
+    parser.add_argument('--start',        type=str,  default=None,
+                        help='JSON string or path to a JSON file specifying start params. '
+                             'Example: {"T_lit":1600,"P_lit":4.0,"Mg#":0.75,'
+                             '"T_bml":2800,"Mg#_bml":0.65}')
     args = parser.parse_args()
 
     os.makedirs(MCMC_DIR, exist_ok=True)
 
+    # ── Determine starting parameters ─────────────────────────
+    start_params = None
+
+    if args.start is not None:
+        # Try parsing as a JSON string first, then fall back to file path
+        try:
+            start_params = json.loads(args.start)
+        except json.JSONDecodeError:
+            with open(args.start) as _f:
+                start_params = json.load(_f)
+        missing = [k for k in PRIOR if k not in start_params]
+        if missing:
+            raise ValueError(f"--start is missing parameters: {missing}")
+        print(f"[start] Using specified start params: {start_params}")
+
+    elif args.random_start:
+        # Each chain gets a unique but reproducible random start (seed = chain_id)
+        rng_init = np.random.default_rng(args.chain)
+        start_params = {
+            k: float(rng_init.uniform(lo, hi))
+            for k, (lo, hi) in PRIOR.items()
+        }
+        print(f"[start] random_start chain={args.chain}: {start_params}")
+
+    else:
+        print(f"[start] Using default START_PARAMS: {START_PARAMS}")
+    # ──────────────────────────────────────────────────────────
+
     if args.test:
         print("Test mode: running 1 step")
-        run_mcmc(chain_id=0, n_steps=1, prefix=args.prefix)
+        run_mcmc(chain_id=0, n_steps=1, prefix=args.prefix,
+                 start_params=start_params)
     else:
-        run_mcmc(chain_id=args.chain, n_steps=args.steps, prefix=args.prefix)
+        run_mcmc(chain_id=args.chain, n_steps=args.steps,
+                 prefix=args.prefix, start_params=start_params)

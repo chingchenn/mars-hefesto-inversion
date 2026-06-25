@@ -186,6 +186,15 @@ SAMUEL_DATA = {
                'S-P': 216.0, 'ScS-S': 258.0},
 }
 
+def solidus_duncan2018(P_GPa):
+    """Duncan et al. 2018 solidus"""
+    if P_GPa <= 10.0:
+        T_C = -4.877 * P_GPa**2 + 120.2 * P_GPa + 1088.0
+    elif P_GPa <= 23.0:
+        T_C = -1.323 * (P_GPa - 10.0)**2 + 38.18 * (P_GPa - 10.0) + 1802.0
+    else:
+        T_C = 77.75 * (P_GPa - 23.0) + 2075.0
+    return T_C + 273.15
 # ============================================================
 # Khan median
 # ============================================================
@@ -734,7 +743,7 @@ def compute_mass_and_moi(fort56_data, khan_cache, bml_data=None):
     return M, moi
 
 def compute_misfit(taup_model, obs_dataset, fort56_data,
-                   khan_cache, bml_data=None):
+                   khan_cache, bml_data=None, params=None):
 
     tt_total = 0.0
     tt_n     = 0
@@ -781,8 +790,20 @@ def compute_misfit(taup_model, obs_dataset, fort56_data,
     mass_misfit = abs(MARS_MASS_OBS - M_pred) / MARS_MASS_SIGMA
     moi_misfit  = abs(MOI_OBS - moi_pred)     / MOI_SIGMA
 
+    solidus_penalty = 0.0
+    if params is not None:
+        P_mantle = fort56_data['depth_km'] * 0.03  
+        T_mantle_profile = fort56_data.get('T_profile', None)
+        if bml_data is not None and params is not None:
+            T_bml = params['T_bml']
+            T_sol = solidus_duncan2018(P_BML_FIXED)
+            if T_bml < T_sol:
+                solidus_penalty = (T_sol - T_bml) / 100.0
+                print(f"    Solidus penalty = {solidus_penalty:.4f} "
+                    f"(T_bml={T_bml:.0f}K < T_sol={T_sol:.0f}K)")
+
     total_n      = tt_n + 2
-    total_misfit = (tt_total + mass_misfit + moi_misfit) / total_n
+    total_misfit = (tt_total + mass_misfit + moi_misfit+ solidus_penalty) / total_n
 
     print(f"    TT misfit   = {tt_misfit:.4f}  (n={tt_n})")
     print(f"    Mass misfit = {mass_misfit:.4f}  "
@@ -853,7 +874,7 @@ def forward(params, run_dir, model_name, khan_cache):
 
     misfit, n_data, components = compute_misfit(
         taup_model, SAMUEL_DATA, fort56_data, khan_cache,
-        bml_data=bml_data)
+        bml_data=bml_data, params=params)
 
     shutil.rmtree(run_dir, ignore_errors=True)
     return misfit, n_data, components

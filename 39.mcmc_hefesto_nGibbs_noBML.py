@@ -967,20 +967,55 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain', use_bml=False
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--chain',   type=int,  default=0)
-    parser.add_argument('--steps',   type=int,  default=100)
-    parser.add_argument('--test',    action='store_true')
-    parser.add_argument('--prefix',  type=str,  default='chain')
-    parser.add_argument('--use_bml', action='store_true',
+    parser.add_argument('--chain',        type=int,  default=0)
+    parser.add_argument('--steps',        type=int,  default=100)
+    parser.add_argument('--test',         action='store_true')
+    parser.add_argument('--prefix',       type=str,  default='chain')
+    parser.add_argument('--use_bml',      action='store_true',
                         help='Include basal melt layer (BML) in forward model')
+    parser.add_argument('--random_start', action='store_true',
+                        help='Start each chain from a random point within the prior '
+                             '(seed=chain_id). Useful for exploring different regions.')
+    parser.add_argument('--start',        type=str,  default=None,
+                        help='JSON string or path to a JSON file specifying start params. '
+                             'Example: {"T_lit":1600,"P_lit":4.0,"Mg#":0.75}')
     args = parser.parse_args()
 
     os.makedirs(MCMC_DIR, exist_ok=True)
 
+    # ── Determine starting parameters ─────────────────────────
+    start_params = None
+
+    if args.start is not None:
+        # Try parsing as a JSON string first, then fall back to file path
+        try:
+            start_params = json.loads(args.start)
+        except json.JSONDecodeError:
+            with open(args.start) as _f:
+                start_params = json.load(_f)
+        missing = [k for k in PRIOR if k not in start_params]
+        if missing:
+            raise ValueError(f"--start is missing parameters: {missing}")
+        print(f"[start] Using specified start params: {start_params}")
+
+    elif args.random_start:
+        # Each chain gets a unique but reproducible random start (seed = chain_id)
+        rng_init = np.random.default_rng(args.chain)
+        start_params = {
+            k: float(rng_init.uniform(lo, hi))
+            for k, (lo, hi) in PRIOR.items()
+        }
+        print(f"[start] random_start chain={args.chain}: {start_params}")
+
+    else:
+        print(f"[start] Using default START_PARAMS: {START_PARAMS}")
+    # ──────────────────────────────────────────────────────────
+
     if args.test:
         print("Test mode: running 1 step")
         run_mcmc(chain_id=0, n_steps=1, prefix=args.prefix,
-                 use_bml=args.use_bml)
+                 use_bml=args.use_bml, start_params=start_params)
     else:
         run_mcmc(chain_id=args.chain, n_steps=args.steps,
-                 prefix=args.prefix, use_bml=args.use_bml)
+                 prefix=args.prefix, use_bml=args.use_bml,
+                 start_params=start_params)

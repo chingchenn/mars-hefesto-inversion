@@ -210,10 +210,6 @@ def draw_events(ax, samuel_data, R_planet):
 
 def draw_sensitivity_bar(ax, density, R_planet, n_grid,
                          bar_frac=0.06):
-    """
-    在圖右側畫垂直 radial sensitivity bar。
-    sensitivity(r) = sum over theta（該半徑的總 ray coverage）。
-    """
     sensitivity = density.sum(axis=1)
     if sensitivity.max() > 0:
         sensitivity /= sensitivity.max()
@@ -234,12 +230,10 @@ def draw_sensitivity_bar(ax, density, R_planet, n_grid,
             color=c, linewidth=0, zorder=4
         )
 
-    # 邊框
     ax.plot([bar_x0, bar_x1, bar_x1, bar_x0, bar_x0],
             [0, 0, R_planet, R_planet, 0],
             'k-', lw=0.6, zorder=5)
 
-    # 標籤
     ax.text((bar_x0 + bar_x1) / 2, -R_planet * 0.07,
             'Radial\nsensitivity', ha='center', fontsize=8, color='#333333')
 
@@ -270,7 +264,6 @@ def build_legend(ax, phase_config, cmb_depth, bml_depth):
 # ============================================================
 
 def main():
-    # ── 載入 ──────────────────────────────────────────────────
     print("Loading MCMC module...")
     spec = importlib.util.spec_from_file_location("mcmc", MCMC_MODULE_PATH)
     mcmc = importlib.util.module_from_spec(spec)
@@ -288,7 +281,7 @@ def main():
     all_segs, density = collect_paths_and_density(
         taup, samuel_data, phase_list, R_MARS, N_GRID)
 
-    # ── 繪圖 ─────────────────────────────────────────────────
+
     fig, ax = plt.subplots(figsize=(13, 9))
     ax.set_aspect('equal')
     ax.axis('off')

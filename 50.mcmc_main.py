@@ -17,6 +17,7 @@ import glob
 import pandas as pd
 from datetime import datetime
 from config import *
+from scipy.optimize import fsolve, brentq, curve_fit
 from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
 
@@ -42,8 +43,8 @@ START_PARAMS = {
     'T_lit':         1539.0,
     'P_lit':         3.69,
     'Mg#':           4.08235 / 5.16834,
-    'T_bml':         2300.0,
-    'Mg#_bml':       0.7,
+    'T_core':        2400.0,    # CMB temperature = liquid BML temperature
+    'Mg#_bulk_bml':  0.62,      # bulk BML composition (Samuel ~Fe-rich)
     'BML_thickness': 168.7,
 }
 
@@ -51,8 +52,8 @@ PRIOR = {
     'T_lit':         (1000.0, 2600.0),
     'P_lit':         (1.5,    9.0),
     'Mg#':           (0.50,   0.86),
-    'T_bml':         (1800.0, 3500.0),
-    'Mg#_bml':       (0.50,   0.80),
+    'T_core':        (1800.0, 3500.0),
+    'Mg#_bulk_bml':  (0.40,   0.80),
     'BML_thickness': (50.0,   400.0),
 }
 
@@ -60,8 +61,8 @@ STEP = {
     'T_lit':         60.0,
     'P_lit':         0.3,
     'Mg#':           0.015,
-    'T_bml':         60.0,
-    'Mg#_bml':       0.015,
+    'T_core':        60.0,
+    'Mg#_bulk_bml':  0.015,
     'BML_thickness': 20.0,
 }
 
@@ -349,6 +350,170 @@ def apply_melt_correction_pierru(Vp, Vs, phi):
     dVp = float(np.interp(phi, _PIERRU_PHI_NODES, _PIERRU_DVP_NODES))
     dVs = float(np.interp(phi, _PIERRU_PHI_NODES, _PIERRU_DVS_NODES))
     return Vp * (1.0 - dVp), max(Vs * (1.0 - dVs), 0.0)
+
+
+# ── BML phase diagram (Fo-Fa, Pierru 2026, W=8000 J/mol) ─────────────────────
+_W_BML   = 8000.0   # J/mol, best fit to Pierru 2026 Table 4
+_R_GAS   = 8.314    # J/mol/K
+
+# Pierru 2026 Table 3: solidus T [K] at Mg#=0.75
+_PIERRU_SOL = {7.95: 1890, 9.6: 1960, 14.1: 2090, 17.7: 2200}
+
+def _get_DH(P):
+    if P < 14.0:   return 142000.0, 89000.0   # olivine
+    elif P < 20.0: return 116000.0, 73000.0   # wadsleyite
+    else:          return 105000.0, 74000.0   # ringwoodite
+
+def _Tm_Fo(P):
+    return 2163.0 * (P / 65.67 + 1.0) ** (1.0 / 0.7809)
+
+def _solve_XS_XL(T, P, TmFa, W):
+    DH_Fo, DH_Fa = _get_DH(P)
+    TmFo = _Tm_Fo(P)
+    def eqs(v):
+        XS, XL = np.clip(v, 1e-9, 1-1e-9)
+        e1 = (2*np.log(XL/XS)     + W/(_R_GAS*T)*(1-XS)**2 - (DH_Fo/_R_GAS)*(1/TmFo - 1/T))
+        e2 = (2*np.log((1-XL)/(1-XS)) + W/(_R_GAS*T)*XS**2 - (DH_Fa/_R_GAS)*(1/TmFa - 1/T))
+        return [e1, e2]
+    for x0 in [[0.85, 0.65], [0.80, 0.55], [0.70, 0.45], [0.90, 0.70]]:
+        sol, info, ier, _ = fsolve(eqs, x0, full_output=True)
+        XS, XL = sol
+        if ier == 1 and np.max(np.abs(info['fvec'])) < 1e-6 and 0 < XS < 1 and 0 < XL < 1 and XS > XL:
+            return float(np.clip(XS, 0, 1)), float(np.clip(XL, 0, 1))
+    return np.nan, np.nan
+
+def _get_TmFa_at_anchor(P_anchor, W):
+    Tsol   = _PIERRU_SOL[P_anchor]
+    TmFo_P = _Tm_Fo(P_anchor)
+    DH_Fo, DH_Fa = _get_DH(P_anchor)
+    XS = 0.75
+    def eqs(v):
+        TmFa, XL = v
+        XL = np.clip(XL, 1e-9, 1-1e-9)
+        e1 = 2*np.log(XL/XS) + W/(_R_GAS*Tsol)*(1-XS)**2 - (DH_Fo/_R_GAS)*(1/TmFo_P - 1/Tsol)
+        e2 = 2*np.log((1-XL)/(1-XS)) + W/(_R_GAS*Tsol)*XS**2 - (DH_Fa/_R_GAS)*(1/TmFa - 1/Tsol)
+        return [e1, e2]
+    for g in [[1400, 0.40], [1600, 0.35], [1200, 0.45]]:
+        sol, info, ier, _ = fsolve(eqs, g, full_output=True)
+        if ier == 1 and np.max(np.abs(info['fvec'])) < 1e-8:
+            return float(sol[0])
+    return np.nan
+
+# Build Tm_Fa(P): Simon-Glatzel fit to anchor points + 1 atm fayalite melting point
+_sg_P = np.array([0.0001] + list(_PIERRU_SOL.keys()))
+_sg_T = np.array([1478.0] + [_get_TmFa_at_anchor(P, _W_BML) for P in _PIERRU_SOL.keys()])
+_sg_popt, _ = curve_fit(lambda P, T0, a, c: T0*(P/a+1)**(1/c), _sg_P, _sg_T,
+                         p0=[1478, 10, 1.5], bounds=([1000, 0.1, 0.1], [3000, 200, 10]))
+
+def Tm_Fa_from_P(P):
+    T0, a, c = _sg_popt
+    return float(T0 * (P/a + 1)**(1/c))
+
+def bml_phase_diagram(T_interface, P_GPa, Mg_bulk):
+    TmFa = Tm_Fa_from_P(P_GPa)
+
+    # solidus: T where XS = Mg_bulk (bulk composition touches the solidus)
+    def sol_res(T):
+        XS, XL = _solve_XS_XL(T, P_GPa, TmFa, _W_BML)
+        return (XS - Mg_bulk) if not np.isnan(XS) else 999.0
+
+    try:
+        T_solidus = brentq(sol_res, 1200.0, 3200.0, xtol=1.0)
+    except Exception:
+        T_solidus = solidus_bml(P_GPa, Mg_bulk)
+
+    # liquidus: T where XL = Mg_bulk (bulk composition touches the liquidus)
+    def liq_res(T):
+        XS, XL = _solve_XS_XL(T, P_GPa, TmFa, _W_BML)
+        return (XL - Mg_bulk) if not np.isnan(XL) else 999.0
+
+    try:
+        T_liquidus = brentq(liq_res, T_solidus, 4000.0, xtol=1.0)
+    except Exception:
+        T_liquidus = T_solidus + 200.0   # fallback
+
+    # Case 1: fully solid
+    if T_interface <= T_solidus:
+        return {'melting': False, 'XS': Mg_bulk, 'XL': np.nan,
+                'f_solid': 1.0, 'f_liquid': 0.0,
+                'T_solidus': T_solidus, 'T_liquidus': T_liquidus}
+
+    # Case 3: fully molten (T > liquidus)
+    if T_interface >= T_liquidus:
+        return {'melting': True, 'XS': np.nan, 'XL': Mg_bulk,
+                'f_solid': 0.0, 'f_liquid': 1.0,
+                'T_solidus': T_solidus, 'T_liquidus': T_liquidus}
+
+    # Case 2: two-phase region → lever rule
+    XS, XL = _solve_XS_XL(T_interface, P_GPa, TmFa, _W_BML)
+    if np.isnan(XS) or abs(XS - XL) < 1e-6:
+        return {'melting': False, 'XS': Mg_bulk, 'XL': np.nan,
+                'f_solid': 1.0, 'f_liquid': 0.0,
+                'T_solidus': T_solidus, 'T_liquidus': T_liquidus}
+
+    # Lever rule: XL < Mg_bulk < XS
+    f_liquid = float(np.clip((Mg_bulk - XS) / (XL - XS), 0.0, 1.0))
+    return {'melting': True, 'XS': XS, 'XL': XL,
+            'f_solid': 1.0 - f_liquid, 'f_liquid': f_liquid,
+            'T_solidus': T_solidus, 'T_liquidus': T_liquidus}
+
+# ── BML thermal state: Ra → Case 2+3 (conductive) or Case 4 (convective) ──────
+_ETA0    = 1e21      # Pa·s, reference viscosity
+_ESTAR   = 3e5       # J/mol, activation energy
+_T0_ETA  = 1600.0   # K, reference temperature
+_ALPHA_S = 2.0e-5   # K⁻¹, thermal expansion (solid BML)
+_RHO_S   = 3800.0   # kg/m³
+_KAPPA_S = 1.0e-6   # m²/s, thermal diffusivity
+_CP_S    = 1200.0   # J/kg/K
+_RA_C    = 1000.0   # critical Rayleigh number
+
+def compute_bml_thermal_state(T_mantle_bottom, T_core, h_solid_km, rho_solid=_RHO_S):
+    dT  = max(T_core - T_mantle_bottom, 0.0)
+    eta = _ETA0 * np.exp(_ESTAR / _R_GAS * (1.0/max(T_mantle_bottom, 400) - 1.0/_T0_ETA))
+    h   = h_solid_km * 1000.0   # m
+    g   = gravity_mars(TRUE_CMB_DEPTH - h_solid_km / 2)
+    Ra  = _ALPHA_S * rho_solid * g * dT * h**3 / (_KAPPA_S * eta)
+
+    if Ra < _RA_C:
+        return T_core, Ra, 'conductive'
+    else:
+        dT_ad = _ALPHA_S * T_mantle_bottom * g / _CP_S * h
+        return T_mantle_bottom + dT_ad, Ra, 'convective'
+
+# ── Liquid BML EoS (Thomas 2012 Fa + Thomas 2013 Fo, linear mixing) ───────────
+def liquid_bml_properties(P_GPa, T_K, Mg_liquid):
+    # Fo end-member: Thomas & Asimow 2013, 3BM/MG, T0=2273K
+    rho0_Fo=2.806; KS0_Fo=17.5; Ksp_Fo=5.3; gam0_Fo=0.62; q_Fo=-0.8; Cv_Fo=900.0; T0_Fo=2273.0
+    # Fa end-member: Thomas et al. 2012, 3BM/MG, T0=1573K
+    rho0_Fa=3.699; KS0_Fa=21.99; Ksp_Fa=7.28; gam0_Fa=0.412; q_Fa=-0.95; Cv_Fa=670.0; T0_Fa=1573.0
+
+    Mg   = float(np.clip(Mg_liquid, 0.0, 1.0))
+    rho0 = Mg*rho0_Fo + (1-Mg)*rho0_Fa
+    KS0  = Mg*KS0_Fo  + (1-Mg)*KS0_Fa
+    Ksp  = Mg*Ksp_Fo  + (1-Mg)*Ksp_Fa
+    gam0 = Mg*gam0_Fo + (1-Mg)*gam0_Fa
+    q    = Mg*q_Fo    + (1-Mg)*q_Fa
+    Cv   = Mg*Cv_Fo   + (1-Mg)*Cv_Fa
+    T0   = Mg*T0_Fo   + (1-Mg)*T0_Fa
+    P_Pa = P_GPa * 1e9
+
+    def P_of_rho(rho):
+        f   = 0.5 * ((rho/rho0)**(2/3) - 1)
+        PS  = 3*KS0*f*(1+2*f)**2.5 * (1 + 1.5*(Ksp-4)*f) * 1e9
+        gam = gam0 * (rho0/rho)**q
+        ES  = 4.5*KS0/rho0*(f**2 + (Ksp-4)*f**3) * 1e9   # J/kg
+        Pth = gam * rho*1e3 * Cv * (T_K - T0)
+        return PS + Pth - P_Pa
+
+    try:
+        rho = brentq(P_of_rho, rho0*0.5, rho0*3.0, xtol=1e-6)
+    except Exception:
+        return rho0, 4.0, 0.0
+
+    dr  = rho * 0.001
+    KS  = abs(rho * (P_of_rho(rho+dr) - P_of_rho(rho-dr)) / (2*dr)) / 1e9   # GPa
+    Vp  = float(np.sqrt(KS * 1e9 / (rho * 1e3))) / 1000.0   # km/s
+    return float(rho), Vp, 0.0
 
 # ── composition ───────────────────────────────────────────────────────────────
 def composition_from_params(params):
@@ -704,66 +869,152 @@ def run_hefesto(params, run_dir, P_bml_top=None):
     return f3, d3
 
 
-def run_hefesto_bml(params, run_dir, T_bml, T_mantle_bottom, true_cmb_depth, n_points=20):
+def run_hefesto_bml(params, run_dir, T_core, T_mantle_bottom, true_cmb_depth,
+                    rho_mantle_bottom=_RHO_S, n_points=20):
     bml_thickness = params['BML_thickness']
-    Mg_bml        = params['Mg#_bml']
+    Mg_bulk       = params['Mg#_bulk_bml']
     bml_top_depth = true_cmb_depth - bml_thickness
     P_top         = max(float(pressure_mars(bml_top_depth)), 5.0)
     P_bottom      = float(pressure_mars(true_cmb_depth))
+    P_mid         = (P_top + P_bottom) / 2.0
 
-    p = composition_from_params({'Mg#': Mg_bml, 'T_lit': T_mantle_bottom, 'P_lit': P_top})
-    O = compute_oxygen(p)
+    # ── self-consistent iteration (pure analytical, < 0.01s) ─────────────────
+    T_interface   = T_core       # initial guess: conductive → T_interface = T_core
+    h_solid_km    = bml_thickness
+    h_liquid_km   = 0.0
+    Mg_solid      = Mg_bulk
+    Mg_liquid     = np.nan
+    Ra            = 0.0
+    thermal_state = 'conductive'
+    pd            = {'melting': False, 'T_solidus': solidus_bml(P_mid, Mg_bulk)}
 
-    P_range = np.linspace(P_top, P_bottom, n_points)
-    T_range = np.linspace(T_mantle_bottom, T_bml, n_points)
-    ad_in   = "".join(f"{P:.6f} 0.000000 {T:.6f}\n" for P, T in zip(P_range, T_range))
+    for _ in range(10):
+        T_old = T_interface
 
-    dir_bml = os.path.join(run_dir, "bml")
-    fort56  = run_hefesto_single(dir_bml,
-              make_control_lines(p, O, f"{P_top:.4f},{P_bottom:.4f},{n_points},0,0,0,-1,0,0"),
-              ad_in_content=ad_in)
-    _cleanup(dir_bml)
-    if fort56 is None:
+        pd = bml_phase_diagram(T_interface, P_mid, Mg_bulk)
+        if not pd['melting']:
+            # fully solid
+            h_solid_km, h_liquid_km = bml_thickness, 0.0
+            Mg_solid, Mg_liquid     = Mg_bulk, np.nan
+        elif pd['f_solid'] < 1e-3:
+            # fully molten (T > liquidus)
+            h_solid_km, h_liquid_km = 0.0, bml_thickness
+            Mg_solid, Mg_liquid     = np.nan, Mg_bulk
+            break
+        else:
+            # two-phase
+            h_solid_km  = max(bml_thickness * pd['f_solid'],  0.0)
+            h_liquid_km = max(bml_thickness * pd['f_liquid'], 0.0)
+            Mg_solid    = pd['XS']
+            Mg_liquid   = pd['XL']
+
+        if h_solid_km < 1.0:          # fully molten → no solid BML
+            h_solid_km, h_liquid_km = 0.0, bml_thickness
+            break
+
+        T_interface, Ra, thermal_state = compute_bml_thermal_state(
+            T_mantle_bottom, T_core, h_solid_km, rho_solid=rho_mantle_bottom)
+
+        if abs(T_interface - T_old) < 5.0:
+            break
+
+    print(f"  BML: Ra={Ra:.1e} [{thermal_state}]  "
+          f"h_sol={h_solid_km:.0f}km  h_liq={h_liquid_km:.0f}km  "
+          f"T_int={T_interface:.0f}K  melt={pd['melting']}")
+
+    # ── Step 3a: HeFESTo solid BML ────────────────────────────────────────────
+    solid_data = None
+    if h_solid_km >= 1.0:
+        n_sol   = max(int(n_points * h_solid_km / bml_thickness), 3)
+        P_sol   = np.linspace(P_top, P_top + (P_bottom-P_top)*h_solid_km/bml_thickness, n_sol)
+        if thermal_state == 'conductive':
+            T_sol = np.linspace(T_mantle_bottom, T_interface, n_sol)
+        else:
+            # convective: solid BML follows its own adiabat starting from T_mantle_bottom
+            # dT/dz = α·T·g/Cp (approximate, using solid BML parameters)
+            g_mid = gravity_mars(bml_top_depth + h_solid_km / 2)
+            dT_ad = _ALPHA_S * T_mantle_bottom * g_mid / _CP_S * h_solid_km * 1000
+            T_sol = np.linspace(T_mantle_bottom, T_mantle_bottom + dT_ad, n_sol)
+
+        p_s   = composition_from_params({'Mg#': Mg_solid, 'T_lit': T_mantle_bottom, 'P_lit': P_sol[0]})
+        O_s   = compute_oxygen(p_s)
+        ad_in = "".join(f"{P:.6f} 0.000000 {T:.6f}\n" for P, T in zip(P_sol, T_sol))
+
+        dir_s  = os.path.join(run_dir, "bml_solid")
+        fort56 = run_hefesto_single(dir_s,
+                 make_control_lines(p_s, O_s, f"{P_sol[0]:.4f},{P_sol[-1]:.4f},{n_sol},0,0,0,-1,0,0"),
+                 ad_in_content=ad_in)
+        _cleanup(dir_s)
+        if fort56 is None:
+            return None
+        raw_s = read_fort56(fort56)
+        if raw_s is None:
+            return None
+
+        depth_s  = _pressure_to_depth(raw_s['P_GPa'], raw_s['rho'])
+        n_pts    = len(raw_s['P_GPa'])
+        Vp_s     = np.zeros(n_pts)
+        Vs_s     = np.zeros(n_pts)
+        phi_s    = np.zeros(n_pts)
+        for i in range(n_pts):
+            phi = compute_melt_fraction(float(raw_s['T_K'][i]), raw_s['P_GPa'][i], Mg_solid)
+            phi_s[i] = phi
+            Vp_s[i], Vs_s[i] = apply_melt_correction_pierru(
+                float(raw_s['Vp'][i]), float(raw_s['Vs'][i]), phi)
+
+        solid_data = {'depth_km': depth_s, 'P_GPa': raw_s['P_GPa'],
+                      'T_K': raw_s['T_K'], 'Vp': Vp_s, 'Vs': Vs_s,
+                      'rho': raw_s['rho'], 'phi': phi_s}
+
+    # ── Step 3b: liquid BML (Thomas EoS, Vs=0, isothermal = T_core) ──────────
+    liquid_data = None
+    if h_liquid_km >= 1.0 and not np.isnan(Mg_liquid):
+        n_liq   = max(int(n_points * h_liquid_km / bml_thickness), 3)
+        P_liq   = np.linspace(P_top + (P_bottom-P_top)*h_solid_km/bml_thickness, P_bottom, n_liq)
+        rho_liq = np.zeros(n_liq)
+        Vp_liq  = np.zeros(n_liq)
+        for i in range(n_liq):
+            rho_liq[i], Vp_liq[i], _ = liquid_bml_properties(P_liq[i], T_core, Mg_liquid)
+
+        off = solid_data['depth_km'][-1] if solid_data is not None else 0.0
+        depth_liq = np.linspace(off, off + h_liquid_km, n_liq)
+
+        liquid_data = {'depth_km': depth_liq, 'P_GPa': P_liq,
+                       'T_K': np.full(n_liq, T_core),
+                       'Vp': Vp_liq, 'Vs': np.zeros(n_liq),
+                       'rho': rho_liq, 'phi': np.ones(n_liq)}
+
+    if solid_data is None and liquid_data is None:
         return None
 
-    bml_raw = read_fort56(fort56)
-    if bml_raw is None:
-        return None
+    # ── merge solid + liquid ──────────────────────────────────────────────────
+    parts = [d for d in [solid_data, liquid_data] if d is not None]
+    def cat(key): return np.concatenate([d[key] for d in parts])
+    depth = cat('depth_km'); P_GPa = cat('P_GPa'); T_K  = cat('T_K')
+    Vp    = cat('Vp');       Vs    = cat('Vs');     rho  = cat('rho'); phi = cat('phi')
 
-    # recompute depth from pressure (BML-local)
-    rho   = bml_raw['rho']
-    P_GPa = bml_raw['P_GPa']
-    depth = _pressure_to_depth(P_GPa, rho)
-
-    T_actual = bml_raw['T_K']
-    phi_arr  = np.zeros(len(P_GPa))
-    Vp_corr  = np.zeros(len(P_GPa))
-    Vs_corr  = np.zeros(len(P_GPa))
-    outer_core_offset = depth[-1]
-
-    for i in range(len(P_GPa)):
-        phi        = compute_melt_fraction(float(T_actual[i]), P_GPa[i], Mg_bml)
-        phi_arr[i] = phi
-        Vp_corr[i], Vs_corr[i] = apply_melt_correction_pierru(
-            float(bml_raw['Vp'][i]), float(bml_raw['Vs'][i]), phi)
-        if phi >= PHI_OUTER_CORE and outer_core_offset == depth[-1]:
-            outer_core_offset = depth[i]
-
-    print(f"  BML: thick={bml_thickness:.0f}km  "
-          f"T={T_mantle_bottom:.0f}→{T_bml:.0f}K  "
-          f"phi={phi_arr[0]:.3f}→{phi_arr[-1]:.3f}  "
-          f"oc_offset={outer_core_offset:.1f}km")
+    oc_offset = depth[-1]
+    for i in range(len(Vs)):
+        if Vs[i] == 0.0:
+            oc_offset = depth[i]; break
 
     return {
-        'depth_km':              depth,
-        'P_GPa':                 P_GPa,
-        'T_K':                   T_actual,
-        'Vp':                    Vp_corr,
-        'Vs':                    Vs_corr,
-        'rho':                   rho,
-        'phi':                   phi_arr,
-        'outer_core_depth_offset': outer_core_offset,
+        'depth_km':                depth,
+        'P_GPa':                   P_GPa,
+        'T_K':                     T_K,
+        'Vp':                      Vp,
+        'Vs':                      Vs,
+        'rho':                     rho,
+        'phi':                     phi,
+        'outer_core_depth_offset': oc_offset,
+        'Ra':                      Ra,
+        'thermal_state':           thermal_state,
+        'h_solid_km':              h_solid_km,
+        'h_liquid_km':             h_liquid_km,
+        'Mg_solid':                Mg_solid,
+        'Mg_liquid':               Mg_liquid if not np.isnan(Mg_liquid) else -1.0,
     }
+
 
 # ── TauP ──────────────────────────────────────────────────────────────────────
 def build_taup(fort56_data, model_name, samuel_cache, bml_data=None):
@@ -963,12 +1214,14 @@ def forward(params, run_dir, model_name, samuel_cache):
     P_profile = fort56_data.get('P_profile')
     T_mantle_bottom = (float(np.interp(P_bml_top, P_profile, T_profile))
                        if T_profile is not None else float(fort56_data['T_K'][-1]))
-    print(f"  T_mantle_bottom={T_mantle_bottom:.1f}K  P_bml_top={P_bml_top:.2f}GPa")
+    rho_mantle_bottom = float(fort56_data['rho'][-1])   # mantle bottom density → proxy for solid BML ρ
+    print(f"  T_mantle_bottom={T_mantle_bottom:.1f}K  P_bml_top={P_bml_top:.2f}GPa  rho_bot={rho_mantle_bottom:.4f}")
 
     bml_raw = run_hefesto_bml(params, run_dir,
-                              T_bml=params['T_bml'],
+                              T_core=params['T_core'],
                               T_mantle_bottom=T_mantle_bottom,
-                              true_cmb_depth=true_cmb_depth)
+                              true_cmb_depth=true_cmb_depth,
+                              rho_mantle_bottom=rho_mantle_bottom)
     if bml_raw is None:
         print("  BML failed → reject"); return None, None, None, None, None
 
@@ -1067,7 +1320,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                 k: float(rng.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
             if attempt > 0:
                 print(f"  Retry {attempt}: T_lit={trial['T_lit']:.1f}  "
-                      f"Mg#={trial['Mg#']:.3f}  T_bml={trial['T_bml']:.1f}")
+                      f"Mg#={trial['Mg#']:.3f}  T_core={trial['T_core']:.1f}  Mg#_bulk_bml={trial['Mg#_bulk_bml']:.3f}")
             current_misfit, _, current_components, _, _ = forward(
                 trial, run_dir, model_name, samuel_cache)
             if current_misfit is not None and np.isfinite(current_misfit):
@@ -1118,6 +1371,12 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                         'bml_P_GPa':                bml_data['P_GPa'],
                         'bml_phi':                  bml_data['phi'],
                         'bml_outer_core_depth_abs': np.array([bml_data['outer_core_depth_abs']]),
+                        'bml_Ra':                   np.array([bml_data.get('Ra', 0.0)]),
+                        'bml_thermal_state':        np.array([bml_data.get('thermal_state', '')]),
+                        'bml_h_solid_km':           np.array([bml_data.get('h_solid_km', 0.0)]),
+                        'bml_h_liquid_km':          np.array([bml_data.get('h_liquid_km', 0.0)]),
+                        'bml_Mg_solid':             np.array([bml_data.get('Mg_solid', -1.0)]),
+                        'bml_Mg_liquid':            np.array([bml_data.get('Mg_liquid', -1.0)]),
                     })
                 np.savez(os.path.join(chain_dir, f"profile_s{step+1:05d}.npz"), **npz_dict)
 

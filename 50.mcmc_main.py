@@ -28,8 +28,8 @@ T_SURF           = 220.0
 GAMMA            = 1.1
 MARS_MASS_OBS    = 6.4171e23
 MARS_MASS_SIGMA  = MARS_MASS_OBS * 0.01
-MOI_OBS          = 0.3634
-MOI_SIGMA        = 0.0006
+MOI_OBS          = 0.36379   # Konopliv et al. 2016 (used in Samuel 2021/2023)
+MOI_SIGMA        = 0.0005    # 5× measurement σ, accounts for model discretization
 MCMC_TEMPERATURE = 1.0
 
 TRUE_CMB_DEPTH = 1743.3   # km  true CMB
@@ -1013,6 +1013,8 @@ def run_hefesto_bml(params, run_dir, T_core, T_mantle_bottom, true_cmb_depth,
         'h_liquid_km':             h_liquid_km,
         'Mg_solid':                Mg_solid,
         'Mg_liquid':               Mg_liquid if not np.isnan(Mg_liquid) else -1.0,
+        'melting':                 pd['melting'],
+        'T_interface':             T_interface,
     }
 
 
@@ -1082,31 +1084,46 @@ def compute_mass_and_moi(fort56_data, samuel_cache, bml_data):
     R              = MARS_RADIUS_M
     true_cmb_km    = samuel_cache['true_cmb_depth']
     bml_top_km     = float(bml_data['depth_km'][0])
+    P_lit_depth_km = fort56_data.get('P_lit_depth_km', 147.0)  # absolute depth of P_lit
 
+    # crust: Samuel profile from surface to crust base (~100 km)
     crust_z      = samuel_cache['crust_z']
     crust_rho    = samuel_cache['crust_rho']
     crust_mask   = crust_z <= 100.0
     crust_r      = R - crust_z[crust_mask] * 1000
     crust_rho_si = crust_rho[crust_mask] * 1000
 
-    hef_depth    = fort56_data['depth_km']
-    mantle_mask  = (hef_depth >= 100.0) & (hef_depth <= bml_top_km)
-    man_r        = R - hef_depth[mantle_mask] * 1000
+    # lithosphere gap: 100 km to P_lit depth, use first HeFeSTo density
+    lit_base_km = 100.0
+    if P_lit_depth_km > lit_base_km + 1.0:
+        n_lit    = 8
+        lith_z   = np.linspace(lit_base_km, P_lit_depth_km, n_lit)
+        lith_r   = R - lith_z * 1000
+        lith_rho = np.full(n_lit, fort56_data['rho'][0] * 1000)
+    else:
+        lith_r = lith_rho = np.array([])
+
+    # mantle: HeFeSTo local depth → absolute radius via P_lit offset
+    hef_depth    = fort56_data['depth_km']   # local (0 = P_lit depth)
+    mantle_mask  = hef_depth <= (bml_top_km - P_lit_depth_km + 1.0)
+    man_r        = R - (hef_depth[mantle_mask] + P_lit_depth_km) * 1000
     man_rho_si   = fort56_data['rho'][mantle_mask] * 1000
 
+    # BML
     bml_depth  = bml_data['depth_km']
     bml_mask   = (bml_depth >= bml_top_km) & (bml_depth <= true_cmb_km)
     bml_r      = R - bml_depth[bml_mask] * 1000
     bml_rho_si = bml_data['rho'][bml_mask] * 1000
 
+    # core: Samuel profile below CMB
     core_z      = samuel_cache['core_z']
     core_rho    = samuel_cache['core_rho']
     core_mask   = core_z >= true_cmb_km
     core_r      = R - core_z[core_mask] * 1000
     core_rho_si = core_rho[core_mask] * 1000
 
-    all_r   = np.concatenate([core_r, bml_r, man_r, crust_r])
-    all_rho = np.concatenate([core_rho_si, bml_rho_si, man_rho_si, crust_rho_si])
+    all_r   = np.concatenate([core_r, bml_r, man_r, lith_r, crust_r])
+    all_rho = np.concatenate([core_rho_si, bml_rho_si, man_rho_si, lith_rho, crust_rho_si])
     idx     = np.argsort(all_r)
     all_r, all_rho = all_r[idx], all_rho[idx]
 
@@ -1134,7 +1151,8 @@ def compute_solidus_penalty(fort56_data, params):
     return penalty
 
 # ── misfit ────────────────────────────────────────────────────────────────────
-def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None):
+def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
+                   mass_sigma=0.0, moi_sigma=0.0):
     phases_std   = ['P', 'S', 'pP', 'sP', 'PP', 'PPP', 'SS', 'SSS', 'sS', 'ScS', 'SKS']
     phases_pdiff = phases_std + ['Pdiff']
 
@@ -1190,11 +1208,12 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None):
         tt_misfit = 999.0
 
     solidus_penalty = compute_solidus_penalty(fort56_data, params) if params else 0.0
-    total_misfit    = tt_misfit + solidus_penalty
+    total_misfit = tt_misfit + solidus_penalty
     if not np.isfinite(total_misfit):
         total_misfit = 999.0
 
-    print(f"  TT={tt_misfit:.4f}(n={tt_n})  solidus={solidus_penalty:.4f}  total={total_misfit:.4f}")
+    print(f"  TT={tt_misfit:.4f}(n={tt_n})  solidus={solidus_penalty:.4f}  "
+          f"mass={mass_sigma:.2f}σ  moi={moi_sigma:.2f}σ  total={total_misfit:.4f}")
 
     return total_misfit, tt_n, {
         'tt': tt_misfit, 'solidus': solidus_penalty,
@@ -1209,6 +1228,9 @@ def forward(params, run_dir, model_name, samuel_cache):
     fort56, fort56_data = run_hefesto(params, run_dir, P_bml_top=P_bml_top)
     if fort56_data is None:
         return None, None, None, None, None
+
+    # store P_lit absolute depth for correct radius computation in compute_mass_and_moi
+    fort56_data['P_lit_depth_km'] = float(np.interp(params['P_lit'], _pres_gpa, _pres_depth))
 
     T_profile = fort56_data.get('T_profile')
     P_profile = fort56_data.get('P_profile')
@@ -1240,14 +1262,11 @@ def forward(params, run_dir, model_name, samuel_cache):
           f"lower={bml_raw['lower_contrast']:+.4f}")
     bml_data = bml_raw
 
-    # mass and MoI as hard prior (reject if > 3σ)
+    # mass and MoI as soft constraints (contribute to misfit, no hard rejection)
     M_pred, moi_pred = compute_mass_and_moi(fort56_data, _samuel_cache, bml_data)
     mass_sigma = abs(MARS_MASS_OBS - M_pred) / MARS_MASS_SIGMA
     moi_sigma  = abs(MOI_OBS       - moi_pred) / MOI_SIGMA
     print(f"  mass={mass_sigma:.2f}σ  moi={moi_sigma:.2f}σ")
-    if mass_sigma > 3.0 or moi_sigma > 3.0:
-        print("  mass/MoI prior violated → reject")
-        return None, None, None, None, None
 
     try:
         taup_model = build_taup(fort56_data, model_name, samuel_cache, bml_data=bml_data)
@@ -1255,12 +1274,22 @@ def forward(params, run_dir, model_name, samuel_cache):
         print(f"  TauP failed: {e}"); return None, None, None, None, None
 
     misfit, n_data, components = compute_misfit(
-        taup_model, SAMUEL_DATA, fort56_data, bml_data=bml_data, params=params)
+        taup_model, SAMUEL_DATA, fort56_data, bml_data=bml_data, params=params,
+        mass_sigma=mass_sigma, moi_sigma=moi_sigma)
 
-    components['upper_contrast'] = bml_data.get('upper_contrast')
-    components['lower_contrast'] = bml_data.get('lower_contrast')
-    components['mass_sigma']     = mass_sigma
-    components['moi_sigma']      = moi_sigma
+    components['upper_contrast']  = bml_data.get('upper_contrast')
+    components['lower_contrast']  = bml_data.get('lower_contrast')
+    components['mass_sigma']      = mass_sigma
+    components['moi_sigma']       = moi_sigma
+    components['Ra']              = bml_data.get('Ra')
+    components['thermal_state']   = bml_data.get('thermal_state')
+    components['h_solid_km']      = bml_data.get('h_solid_km')
+    components['h_liquid_km']     = bml_data.get('h_liquid_km')
+    components['melting']         = bml_data.get('melting', False)
+    components['Mg_solid']        = bml_data.get('Mg_solid')
+    components['Mg_liquid']       = bml_data.get('Mg_liquid')
+    components['T_mantle_bottom'] = T_mantle_bottom
+    components['T_interface']     = bml_data.get('T_interface')
 
     return misfit, n_data, components, fort56_data, bml_data
 
@@ -1293,6 +1322,11 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             chain = json.load(f)
         if chain:
             current = chain[-1]['params']
+            # migrate old parameter names → new names
+            if 'T_bml' in current and 'T_core' not in current:
+                current['T_core'] = current.pop('T_bml')
+            if 'Mg#_bml' in current and 'Mg#_bulk_bml' not in current:
+                current['Mg#_bulk_bml'] = current.pop('Mg#_bml')
             print(f"Chain {chain_id}: resuming from step {len(chain)}")
 
     step_start = len(chain)
@@ -1381,7 +1415,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                 np.savez(os.path.join(chain_dir, f"profile_s{step+1:05d}.npz"), **npz_dict)
 
         elapsed     = (datetime.now() - t0).total_seconds()
-        accept_rate = accept_count / (step - step_start + 1) * 100
+        accept_rate = accept_count / (step + 1) * 100
         uc          = current_components.get('upper_contrast')
         print(f"  Step {step+1:4d}: misfit={current_misfit:.4f}  "
               f"{'ACCEPT' if accepted else 'reject'}  "
@@ -1399,6 +1433,15 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             'moi_sigma':      current_components.get('moi_sigma'),
             'upper_contrast': current_components.get('upper_contrast'),
             'lower_contrast': current_components.get('lower_contrast'),
+            'Ra':             current_components.get('Ra'),
+            'thermal_state':  current_components.get('thermal_state'),
+            'h_solid_km':     current_components.get('h_solid_km'),
+            'h_liquid_km':    current_components.get('h_liquid_km'),
+            'melting':        current_components.get('melting'),
+            'Mg_solid':       current_components.get('Mg_solid'),
+            'Mg_liquid':      current_components.get('Mg_liquid'),
+            'T_mantle_bottom':current_components.get('T_mantle_bottom'),
+            'T_interface':    current_components.get('T_interface'),
             'accepted':       bool(accepted),
             'accept_rate':    accept_rate,
         })

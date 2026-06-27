@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 MCMC_BASE_DIR  = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
-CHAIN_PREFIX   = 'chain_a21'
-HEF_PREFIX     = 'chain_a07'
+CHAIN_PREFIX   = 'chain_a23'
+HEF_PREFIX     = 'chain_a21'
 KHAN_MODEL_DIR = '/net/beno3/data1/jcchen2/Mars_Khan_2023/LSL_Models'
 SAMUEL_BASE    = ('/net/beno3/data1/jcchen2/Mars_Samuel_2023/'
                   'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
@@ -361,6 +361,6 @@ fig.suptitle(
     fontsize=9.5, y=1.01,
 )
 
-out = f'{MCMC_BASE_DIR}/best_fit_{CHAIN_PREFIX}_top{TOP_N}.png'
+out = f'/net/beno3/data1/jcchen2/mars-hefesto-runs/figures/best_fit_{CHAIN_PREFIX}_top{TOP_N}.png'
 plt.savefig(out, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
 print(f"\nSaved: {out}")

@@ -2,7 +2,6 @@ import os
 import shutil
 import subprocess
 import numpy as np
-from config import *
 import json
 import argparse
 from datetime import datetime
@@ -18,15 +17,16 @@ from obspy.taup.taup_create import build_taup_model
 
 repo_root = Path('/home/jcchen2/nGibbs/')  
 src_root  = repo_root / "src"
-module_root = src_root / "module"
+#module_root = src_root / "module"
 sys.path.insert(0, str(src_root))
-sys.path.insert(0, str(module_root))
+#sys.path.insert(0, str(module_root))
+sys.path.insert(0, str(src_root / "ngibbs"))
 
-from module.utils.math_utils import IDX_2D_Lithosphere
-from module.engine.API import HeFESToEmulatorCPU
+from ngibbs.utils.math_utils import IDX_2D_Lithosphere
+from ngibbs.engine.API import HeFESToMarsEmulatorCPU as HeFESToEmulatorCPU
 if torch.cuda.is_available():
-    from module.engine.API import HeFESToEmulatorGPU
-
+    from ngibbs.engine.API import HeFESToMarsEmulatorGPU as HeFESToEmulatorGPU
+from mars_config import *
 # ============================================================
 # parameters
 # ============================================================
@@ -642,12 +642,12 @@ def run_ngibbs(params):
 
     # 用 Burnman 從 component_moles 算 entropy
     PT_single = np.array([[P_lit, T_lit]], dtype=np.float64)
-    burnman_s = HeFESToEmulatorCPU.get_property_burnman_vectorized_from_assemblage(
-        torch.tensor(out1['component_moles'], dtype=torch.float64),
-        torch.tensor(PT_single, dtype=torch.float64),
-        property_names=['entropy_by_mass'],
+    burnman_s = HeFESToEmulatorCPU.get_property_hefesto_vectorized_from_assemblage(
+    torch.tensor(out1['component_moles'], dtype=torch.float64),
+    torch.tensor(PT_single, dtype=torch.float64),
+    property_names=['S'],
     )
-    S_lit = float(burnman_s['entropy_by_mass'][0])/ 1000.0 # J/g/K
+    S_lit = float(burnman_s['S'][0])
     print(f"    S_lit = {S_lit:.6f} J/g/K  @ P={P_lit:.2f} GPa, T={T_lit:.1f} K")
 
     # ── Step 2: Isentropic segment (asthenosphere) ─────────────
@@ -673,14 +673,16 @@ def run_ngibbs(params):
 
     # Burnman bulk properties for isentropic segment
     PT_isen = np.stack([isen_input[:, 0], T_isen], axis=1)
-    burnman_isen = HeFESToEmulatorCPU.get_property_burnman_vectorized_from_assemblage(
+    burnman_isen = HeFESToEmulatorCPU.get_property_hefesto_vectorized_from_assemblage(
         torch.tensor(out2['component_moles'], dtype=torch.float64),
         torch.tensor(PT_isen, dtype=torch.float64),
-        property_names=['density', 'p_wave_velocity', 's_wave_velocity',
-                        'isentropic_bulk_modulus_reuss'],
+        property_names=['rho', 'Vp', 'Vs', 'Kr'],
     )
-    for k, v in burnman_isen.items():
-        properties[k][isentropic_IDX[1]] = v
+    idx = isentropic_IDX[1]
+    properties['density'][idx]                       = np.asarray(burnman_isen['rho']) * 1000.0
+    properties['p_wave_velocity'][idx]               = burnman_isen['Vp']
+    properties['s_wave_velocity'][idx]               = burnman_isen['Vs']
+    properties['isentropic_bulk_modulus_reuss'][idx] = burnman_isen['Kr']
 
     # ── Step 3: Conductive segment (lithosphere) ───────────────
     T_lit_actual = float(properties['temperature'][P_lit_idx])
@@ -699,14 +701,17 @@ def run_ngibbs(params):
         )
 
     PT_iso = np.stack([iso_input[:, 0], T_cond], axis=1)
-    burnman_iso = HeFESToEmulatorCPU.get_property_burnman_vectorized_from_assemblage(
+    burnman_iso = HeFESToEmulatorCPU.get_property_hefesto_vectorized_from_assemblage(
         torch.tensor(out3['component_moles'], dtype=torch.float64),
         torch.tensor(PT_iso, dtype=torch.float64),
-        property_names=['density', 'p_wave_velocity', 's_wave_velocity',
-                        'isentropic_bulk_modulus_reuss'],
+        property_names=['rho', 'Vp', 'Vs', 'Kr'],
     )
-    for k, v in burnman_iso.items():
-        properties[k][isothermal_IDX[1]] = v
+    idx = isothermal_IDX[1]
+    properties['density'][idx]                       = np.asarray(burnman_iso['rho']) * 1000.0
+    properties['p_wave_velocity'][idx]               = burnman_iso['Vp']
+    properties['s_wave_velocity'][idx]               = burnman_iso['Vs']
+    properties['isentropic_bulk_modulus_reuss'][idx] = burnman_iso['Kr']
+
 
     # ── 轉換成你原本的 fort56_data 格式 ──────────────────────
     rho = properties['density']
@@ -721,11 +726,11 @@ def run_ngibbs(params):
     'depth_km':  depth,
     'P_GPa':     pressures,
     'T_K':       properties['temperature'],
-    'Vp':        properties['p_wave_velocity']/1000.0,
-    'Vs':        properties['s_wave_velocity']/1000.0,
+    'Vp':        properties['p_wave_velocity'],
+    'Vs':        properties['s_wave_velocity'],
     'rho':       rho/1000.0,
-    'P_profile': pressures,                    # ← 加這行
-    'T_profile': properties['temperature'],    # ← 加這行
+    'P_profile': pressures,                   
+    'T_profile': properties['temperature'],    
     }
 
 
@@ -750,29 +755,28 @@ def run_ngibbs_bml(params, P_top, P_bottom, T_bml, n_points=20):
             bml_input, headers=T_headers, outputs=['component_moles']
         )
 
-    burnman_out = HeFESToEmulatorCPU.get_property_burnman_vectorized_from_assemblage(
-        torch.tensor(out['component_moles'], dtype=torch.float64),
-        torch.tensor(bml_input[:, :2],      dtype=torch.float64),
-        property_names=['density', 'p_wave_velocity'],
+    burnman_out = HeFESToEmulatorCPU.get_property_hefesto_vectorized_from_assemblage(
+        torch.tensor(np.asarray(out['component_moles']), dtype=torch.float64),
+        torch.tensor(bml_input[:, :2], dtype=torch.float64),
+        property_names=['rho', 'Vp'],
     )
 
     # 計算深度
-    rho = burnman_out['density']
+    rho = np.asarray(burnman_out['rho'])          # g/cm3
     dP  = np.diff(pressures) * 1e9
     depth = np.zeros(n_points)
     for i in range(len(dP)):
         g_i        = gravity_mars(depth[i])
-        rho_si     = ((rho[i] + rho[i+1]) / 2) 
+        rho_si     = ((rho[i] + rho[i+1]) / 2) * 1000.0
         depth[i+1] = depth[i] + dP[i] / (rho_si * g_i) / 1000
 
     return {
         'depth_km': depth,
         'P_GPa':    pressures,
-        'Vp':       burnman_out['p_wave_velocity']/1000.0,
-        'Vs':       np.zeros(n_points),  
-        'rho':      burnman_out['density'] / 1000.0,
+        'Vp':       np.asarray(burnman_out['Vp']),
+        'Vs':       np.zeros(n_points),
+        'rho':      rho,
     }
-
 # ============================================================
 # TauP
 # ============================================================
@@ -795,7 +799,7 @@ def build_taup(fort56_data, model_name, khan_cache, bml_data=None):
     hef_Vs    = fort56_data['Vs']
     hef_rho   = fort56_data['rho']
 
-    mantle_mask = (hef_depth >= 200.0) & (hef_depth <= mantle_bottom)
+    mantle_mask = (hef_depth >= 100.0) & (hef_depth <= mantle_bottom)
     man_depth   = hef_depth[mantle_mask]
     man_Vp      = hef_Vp[mantle_mask]
     man_Vs      = hef_Vs[mantle_mask]

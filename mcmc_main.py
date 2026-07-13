@@ -1,25 +1,46 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-43_mcmc_hefesto_bml.py
-MCMC inversion for Mars interior structure using HeFESTo + BML physics
+57_mcmc_nGibbs_Mars.py chain_a24
+MCMC inversion for Mars interior structure using nGibbs (HeFESTo emulator) + BML physics
 """
 
 import os
 import re
-import io
-import shutil
-import subprocess
 import numpy as np
 import json
 import argparse
 import glob
 import pandas as pd
+import sys
+import torch
+from pathlib import Path
 from datetime import datetime
-from config import *
 from scipy.optimize import fsolve, brentq, curve_fit
 from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
+
+NGIBBS_ROOT = Path('/home/jcchen2/nGibbs/')
+sys.path.insert(0, str(NGIBBS_ROOT / "src"))
+sys.path.insert(0, str(NGIBBS_ROOT / "src" / "ngibbs"))
+
+from ngibbs.engine.API import HeFESToMarsEmulatorCPU as EM
+if torch.cuda.is_available():
+    from ngibbs.engine.API import HeFESToMarsEmulatorGPU as EM
+
+from mars_config import *
+
+NG_T_HEADERS = ['P(GPa)(System_main)', 'T(K)(System_main)',
+                'Si', 'Mg', 'Fe', 'Ca', 'Al', 'Na', 'Cr', 'O']
+NG_S_HEADERS = ['P(GPa)(System_main)', 'S(J/g/K)(System_main)',
+                'Si', 'Mg', 'Fe', 'Ca', 'Al', 'Na', 'Cr', 'O']
+NG_S_MIN     = 1.75
+NG_S_MAX     = 2.90
+NG_N_SHALLOW = 100
+NG_N_DEEP    = 101
+
+# per-proposal S_lit log (includes proposals rejected for being out of range)
+_NG_S_LOG = {'last': np.nan, 'last_in_range': True, 'all': [], 'n_below': 0, 'n_above': 0}
 
 # ── constants ─────────────────────────────────────────────────────────────────
 MARS_RADIUS      = 3389.5
@@ -29,7 +50,7 @@ GAMMA            = 1.1
 MARS_MASS_OBS    = 6.4171e23
 MARS_MASS_SIGMA  = MARS_MASS_OBS * 0.01
 MOI_OBS          = 0.36379   # Konopliv et al. 2016 (used in Samuel 2021/2023)
-MOI_SIGMA        = 0.0005    # 5× measurement σ, accounts for model discretization
+MOI_SIGMA        = 0.0015    
 MCMC_TEMPERATURE = 1.0
 
 TRUE_CMB_DEPTH = 1743.3   # km  true CMB
@@ -194,8 +215,6 @@ SAMUEL_DATA = {
 }
 
 # ── gravity and pressure profiles (computed once at import) ───────────────────
-def _build_gravity_pressure():
-    G = 6.674e-11
 def _build_gravity_pressure():
     G = 6.674e-11
     data = np.loadtxt(SAMUEL_RHO_PROFILE_PATH)
@@ -465,14 +484,21 @@ _ALPHA_S = 2.0e-5   # K⁻¹, thermal expansion (solid BML)
 _RHO_S   = 3800.0   # kg/m³
 _KAPPA_S = 1.0e-6   # m²/s, thermal diffusivity
 _CP_S    = 1200.0   # J/kg/K
-_RA_C    = 1000.0   # critical Rayleigh number
+_VSTAR = 3.0e-6      # m³/mol  (Drilleau 2026 Table 1: V* 0–10 cm³/mol, inverted)
+_P_REF = 3.0e9       # Pa      (Drilleau 2021/2026 reference pressure)
+_RA_C  = 1.0e3       
 
-def compute_bml_thermal_state(T_mantle_bottom, T_core, h_solid_km, rho_solid=_RHO_S):
-    dT  = max(T_core - T_mantle_bottom, 0.0)
-    eta = _ETA0 * np.exp(_ESTAR / _R_GAS * (1.0/max(T_mantle_bottom, 400) - 1.0/_T0_ETA))
-    h   = h_solid_km * 1000.0   # m
-    g   = gravity_mars(TRUE_CMB_DEPTH - h_solid_km / 2)
-    Ra  = _ALPHA_S * rho_solid * g * dT * h**3 / (_KAPPA_S * eta)
+def compute_bml_thermal_state(T_mantle_bottom, T_core, h_solid_km, bml_top_km,
+                              rho_solid=_RHO_S):
+    z_mid = bml_top_km + h_solid_km / 2.0            # 固態 BML 中心深度
+    P_mid = float(pressure_mars(z_mid)) * 1e9        # Pa
+    T_mid = 0.5 * (T_mantle_bottom + T_core)         # 層中心溫度
+    dT    = max(T_core - T_mantle_bottom, 0.0)
+    eta   = _ETA0 * np.exp((_ESTAR + P_mid*_VSTAR) / (_R_GAS * T_mid)
+                           - (_ESTAR + _P_REF*_VSTAR) / (_R_GAS * _T0_ETA))
+    h     = h_solid_km * 1000.0
+    g     = gravity_mars(z_mid)
+    Ra    = _ALPHA_S * rho_solid * g * dT * h**3 / (_KAPPA_S * eta)
 
     if Ra < _RA_C:
         return T_core, Ra, 'conductive'
@@ -527,350 +553,114 @@ def compute_oxygen(p):
     return (2.0*p['Si'] + p['Mg'] + p['Fe'] + p['Ca'] +
             1.5*p['Al'] + 0.5*p['Na'] + 1.5*p['Cr'])
 
-# ── HeFESTo control file ──────────────────────────────────────────────────────
-CONTROL_PHASES = """\
-phase plg
-0
-an
-ab
-phase sp
-1
-sp
-hc
-smag
-picr
-phase opx
-0
-en
-fs
-mgts
-odi
-phase c2c
-0
-mgc2
-fec2
-phase cpx
-1
-di
-he
-cen
-cats
-jd
-acm
-phase wo
-1
-wo
-phase pwo
-1
-pwo
-phase gt
-0
-py
-al
-gr
-mgmj
-namj
-andr
-knor
-phase cpv
-0
-capv
-phase ol
-1
-fo
-fa
-phase wa
-0
-mgwa
-fewa
-phase ri
-0
-mgri
-feri
-phase il
-0
-mgil
-feil
-co
-hem
-esk
-phase pv
-0
-mgpv
-fepv
-alpv
-hepv
-hlpv
-fapv
-crpv
-phase ppv
-0
-mppv
-fppv
-appv
-hppv
-cppv
-phase cf
-0
-mgcf
-fecf
-nacf
-hmag
-crcf
-phase nal
-0
-mnal
-fnal
-nnal
-phase mw
-0
-pe
-wu
-wuls
-anao
-mag
-phase qtz
-0
-qtz
-phase coes
-0
-coes
-phase st
-0
-st
-phase apbo
-0
-apbo
-phase ky
-0
-ky
-phase neph
-0
-neph
-phase fea
-0
-fea
-phase feg
-0
-feg
-phase fee
-0
-fee
-"""
+# ── nGibbs helpers ────────────────────────────────────────────────────────────
+def _ng_props(component_moles, P, T, names):
+    PT = np.stack([np.asarray(P, dtype=np.float64),
+                   np.asarray(T, dtype=np.float64)], axis=1)
+    return EM.get_property_hefesto_vectorized_from_assemblage(
+        torch.tensor(np.asarray(component_moles), dtype=torch.float64),
+        torch.tensor(PT, dtype=torch.float64),
+        property_names=names,
+    )
 
 
-def make_control_lines(p, O, line1):
-    return [
-        line1, "8,2,4,2", "oxides",
-        f"Si      {p['Si']:.5f}     {p['Si']:.5f}    0",
-        f"Mg      {p['Mg']:.5f}     {p['Mg']:.5f}    0",
-        f"Fe      {p['Fe']:.5f}     {p['Fe']:.5f}    0",
-        f"Ca      {p['Ca']:.5f}     {p['Ca']:.5f}    0",
-        f"Al      {p['Al']:.5f}     {p['Al']:.5f}    0",
-        f"Na      {p['Na']:.5f}     {p['Na']:.5f}    0",
-        f"Cr      {p['Cr']:.5f}     {p['Cr']:.5f}    0",
-        f" O      {O:.5f}     {O:.5f}    0",
-        "1,1,1,1", PAR_DIR, "73", CONTROL_PHASES,
-    ]
-
-# ── HeFESTo runner ─────────────────────────────────────────────────────────────
-def _pressure_to_depth(P_GPa, rho):
-    depth = np.zeros(len(P_GPa))
-    for i, dP in enumerate(np.diff(P_GPa) * 1e9):
-        depth[i+1] = depth[i] + dP / (((rho[i]+rho[i+1])/2) * 1000 * gravity_mars(depth[i])) / 1000
-    return depth
-def _cleanup(step_dir):
-    keep = {'fort.56', 'fort.66', 'ad.in', 'control'}
-    if not os.path.isdir(step_dir):
-        return
-    for fname in os.listdir(step_dir):
-        if fname not in keep:
-            fpath = os.path.join(step_dir, fname)
-            try:
-                if os.path.isfile(fpath):   os.remove(fpath)
-                elif os.path.isdir(fpath):  shutil.rmtree(fpath, ignore_errors=True)
-            except Exception:
-                pass
+def _ng_forward(P, T_or_S, comp_values, headers, outputs):
+    x = np.zeros((len(P), 2 + len(comp_values)), dtype=np.float32)
+    x[:, 0]  = P
+    x[:, 1]  = T_or_S
+    x[:, 2:] = comp_values
+    with torch.no_grad():
+        return EM.ForwardMB(x, headers=headers, outputs=outputs)
 
 
-def run_hefesto_single(run_dir, control_lines, ad_in_content=None, timeout=1600):
-    os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, "control"), 'w') as f:
-        f.write("\n".join(control_lines))
-    if ad_in_content is not None:
-        with open(os.path.join(run_dir, "ad.in"), 'w') as f:
-            f.write(ad_in_content)
-    main_dst = os.path.join(run_dir, "main")
-    if not os.path.exists(main_dst):
-        shutil.copy2(HEFESTO_MAIN, main_dst)
-        os.chmod(main_dst, 0o755)
-    try:
-        with open(os.path.join(run_dir, "hefesto.log"), 'w') as log:
-            subprocess.run(["./main"], cwd=run_dir,
-                           stdout=log, stderr=log, timeout=timeout)
-    except Exception:
-        return None
-    fort56 = os.path.join(run_dir, "fort.56")
-    if not os.path.exists(fort56) or os.path.getsize(fort56) == 0:
-        return None
-    return fort56
+def _comp_values(p, O):
+    return [p['Si'], p['Mg'], p['Fe'], p['Ca'],
+            p['Al'], p['Na'], p['Cr'], O]
 
 
-def read_fort56(fort56_path):
-    try:
-        with open(fort56_path) as f:
-            f.readline()
-            cols = f.readline().split()
-        if not cols:
-            return None
-
-        clean_lines = []
-        with open(fort56_path) as f:
-            for i, line in enumerate(f):
-                if i < 2:
-                    clean_lines.append(line)
-                    continue
-                if re.search(r'\d-\d', line):
-                    continue
-                clean_lines.append(line)
-
-        if len(clean_lines) <= 2:
-            return None
-
-        df = pd.read_csv(io.StringIO(''.join(clean_lines)),
-                         sep=r'\s+', skiprows=2, names=cols)
-        if df.empty:
-            return None
-    except Exception as e:
-        print(f"  read_fort56 failed: {e}")
-        return None
-
-    for col in cols:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-
-    key_cols = ['P(GPa)', 'T(K)', 'S(J/g/K)', 'rho(g/cm^3)', 'VS(km/s)', 'VP(km/s)']
-    df = df.dropna(subset=[c for c in key_cols if c in df.columns])
-    if len(df) < 1:
-        return None
-
-    P_GPa = df['P(GPa)'].values
-    rho   = df['rho(g/cm^3)'].values
-    depth = _pressure_to_depth(P_GPa, rho)
-
-    return {
-        'depth_km': depth,
-        'P_GPa':    P_GPa,
-        'T_K':      df['T(K)'].values,
-        'S':        df['S(J/g/K)'].values,
-        'Vp':       df['VP(km/s)'].values,
-        'Vs':       df['VS(km/s)'].values,
-        'rho':      rho,
-    }
-
-
-def run_hefesto(params, run_dir, P_bml_top=None):
-    p   = composition_from_params(params)
-    O   = compute_oxygen(p)
+def run_ngibbs(params, P_bml_top=None):
+    p = composition_from_params(params)
+    O = compute_oxygen(p)
     T_lit, P_lit = p['T_lit'], p['P_lit']
+    comp_values = _comp_values(p, O)
 
     if P_bml_top is None:
         bml_top_km = TRUE_CMB_DEPTH - params.get('BML_thickness', 168.7)
         P_bml_top  = float(pressure_mars(bml_top_km))
 
-    # step 1: S_lit
-    dir1 = os.path.join(run_dir, "s1_npt")
-    f1   = run_hefesto_single(dir1,
-           make_control_lines(p, O,
-           f"{P_lit:.4f},{P_lit:.4f},1,{T_lit:.2f},{T_lit:.2f},0,0,0,0"))
-    if f1 is None:
-        print("  Step 1 failed"); _cleanup(dir1); return None, None
-    d1   = read_fort56(f1)
-    if d1 is None:
-        print("  Step 1 read failed"); _cleanup(dir1); return None, None
-    S_lit = float(d1['S'][0])
-    if not np.isfinite(S_lit) or S_lit <= 0 or S_lit > 10:
-        print(f"  Step 1: invalid S_lit={S_lit}"); _cleanup(dir1); return None, None
+    # step 1: S_lit at (P_lit, T_lit)
+    out1  = _ng_forward([P_lit], [T_lit], comp_values,
+                        NG_T_HEADERS, ['component_moles'])
+    S_lit = float(_ng_props(out1['component_moles'],
+                            [P_lit], [T_lit], ['S'])['S'][0])
+
+    in_range = np.isfinite(S_lit) and NG_S_MIN <= S_lit <= NG_S_MAX
+    _NG_S_LOG['last']          = S_lit
+    _NG_S_LOG['last_in_range'] = in_range
+    _NG_S_LOG['all'].append(S_lit)
+    if np.isfinite(S_lit) and S_lit < NG_S_MIN: _NG_S_LOG['n_below'] += 1
+    if np.isfinite(S_lit) and S_lit > NG_S_MAX: _NG_S_LOG['n_above'] += 1
+
+    if not in_range:
+        print(f"  S_lit={S_lit:.4f} outside nGibbs training range "
+              f"[{NG_S_MIN}, {NG_S_MAX}]")
+        return None
     print(f"  S_lit={S_lit:.6f}  T={T_lit:.1f}K  P={P_lit:.2f}GPa")
-    _cleanup(dir1)
 
-    # step 2: NPT scan → adiabatic T(P)
-    _P_nodes = np.array([9.0, 12.0, 15.0, 17.0])
-    P_scan = np.concatenate([[P_lit], _P_nodes[_P_nodes < P_bml_top], [P_bml_top]])
-    T_guess      = T_lit
-    P_adiab_list = [P_lit]
-    T_adiab_list = [T_lit]
+    # pressure grid: surface -> P_bml_top
+    P = np.concatenate([np.linspace(0.01, 3.0, NG_N_SHALLOW),
+                        np.linspace(3.0, P_bml_top, NG_N_DEEP)[1:]])
+    n    = len(P)
+    isen = P >= P_lit
+    iso  = ~isen
 
-    for i_p, P_target in enumerate(P_scan[1:]):
-        d_lo = d_hi = None
-        for dT in [20.0, 10.0, 5.0, 2.0]:
-            T_lo, T_hi = T_guess - dT, T_guess + dT
-            dir_lo = os.path.join(run_dir, f"s2_scan_{i_p}_lo")
-            dir_hi = os.path.join(run_dir, f"s2_scan_{i_p}_hi")
-            f_lo = run_hefesto_single(dir_lo, make_control_lines(p, O,
-                   f"{P_target:.4f},{P_target:.4f},1,{T_lo:.2f},{T_lo:.2f},0,0,0,0"))
-            f_hi = run_hefesto_single(dir_hi, make_control_lines(p, O,
-                   f"{P_target:.4f},{P_target:.4f},1,{T_hi:.2f},{T_hi:.2f},0,0,0,0"))
-            d_lo = read_fort56(f_lo) if f_lo else None
-            d_hi = read_fort56(f_hi) if f_hi else None
-            _cleanup(dir_lo); _cleanup(dir_hi)
-            if d_lo is not None and d_hi is not None:
-                break
+    T   = np.zeros(n)
+    rho = np.zeros(n)
+    Vp  = np.zeros(n)
+    Vs  = np.zeros(n)
 
-        if d_lo is None or d_hi is None:
-            if len(T_adiab_list) >= 2:
-                dT_dP = ((T_adiab_list[-1] - T_adiab_list[-2]) /
-                         (P_adiab_list[-1] - P_adiab_list[-2]))
-                T_adiab_p = T_adiab_list[-1] + dT_dP * (P_target - P_adiab_list[-1])
-            else:
-                T_adiab_p = T_guess
-        else:
-            S_lo, S_hi = float(d_lo['S'][0]), float(d_hi['S'][0])
-            if abs(S_hi - S_lo) < 1e-8:
-                T_adiab_p = T_guess
-            else:
-                T_adiab_p = T_lo + (S_lit - S_lo) * (T_hi - T_lo) / (S_hi - S_lo)
+    # step 2: isentropic asthenosphere (T(P) directly, no bisection)
+    out2   = _ng_forward(P[isen], np.full(isen.sum(), S_lit), comp_values,
+                         NG_S_HEADERS, ['component_moles', 'temperature'])
+    T_isen = np.asarray(out2['temperature'].detach().cpu(), dtype=np.float64)
+    T[isen] = T_isen
+    pr = _ng_props(out2['component_moles'], P[isen], T_isen, ['rho', 'Vp', 'Vs'])
+    rho[isen] = pr['rho']
+    Vp[isen]  = pr['Vp']
+    Vs[isen]  = pr['Vs']
 
-        T_adiab_p = float(np.clip(T_adiab_p, 800, 4000))
-        P_adiab_list.append(P_target)
-        T_adiab_list.append(T_adiab_p)
-        T_guess = T_adiab_p
+    # step 3: conductive lithosphere, T linear in P
+    T_iso  = T_SURF + (T_lit - T_SURF) * (P[iso] / P_lit)
+    T[iso] = T_iso
+    out3 = _ng_forward(P[iso], T_iso, comp_values,
+                       NG_T_HEADERS, ['component_moles'])
+    pr = _ng_props(out3['component_moles'], P[iso], T_iso, ['rho', 'Vp', 'Vs'])
+    rho[iso] = pr['rho']
+    Vp[iso]  = pr['Vp']
+    Vs[iso]  = pr['Vs']
 
-    P_adiab = np.array(P_adiab_list)
-    T_adiab = np.array(T_adiab_list)
-    print(f"  Adiabat: T={T_adiab[0]:.1f}K@{P_adiab[0]:.2f}GPa → "
-          f"T={T_adiab[-1]:.1f}K@{P_adiab[-1]:.2f}GPa")
+    if not np.all(np.isfinite(rho)) or np.any(rho <= 0):
+        print("  nGibbs returned invalid density")
+        return None
 
-    # build ad.in
-    P_cond = np.linspace(1.04, P_lit, 100)
-    T_cond = T_SURF + (T_lit - T_SURF) * (P_cond / P_lit)
-    P_full = np.concatenate([P_cond, P_adiab])
-    T_full = np.concatenate([T_cond, T_adiab])
-    idx    = np.argsort(P_full)
-    P_full, T_full = P_full[idx], T_full[idx]
-    _, uniq = np.unique(P_full, return_index=True)
-    P_full, T_full = P_full[uniq], T_full[uniq]
-    ad_in  = "".join(f"{P:.6f} 0.000000 {T:.6f}\n" for P, T in zip(P_full, T_full))
+    print(f"  Adiabat: T={T_isen[0]:.1f}K@{P[isen][0]:.2f}GPa -> "
+          f"T={T[-1]:.1f}K@{P[-1]:.2f}GPa")
 
-    # step 3: full run
-    dir3   = os.path.join(run_dir, "s3_final")
-    f3     = run_hefesto_single(dir3,
-             make_control_lines(p, O, f"0,{P_bml_top:.4f},50,0,0,0,-1,0,0"),
-             ad_in_content=ad_in)
-    _cleanup(dir3)
-    if f3 is None:
-        print("  Step 3 failed"); return None, None
-    d3 = read_fort56(f3)
-    if d3 is None:
-        print("  Step 3 read failed"); return None, None
-
-    d3['P_profile'] = P_full
-    d3['T_profile'] = T_full
-    print("  Step 3 OK")
-    return f3, d3
+    return {
+        'depth_km':  np.interp(P, _pres_gpa, _pres_depth),
+        'P_GPa':     P,
+        'T_K':       T,
+        'S':         np.full(n, S_lit),
+        'Vp':        Vp,
+        'Vs':        Vs,
+        'rho':       rho,
+        'P_profile': P,
+        'T_profile': T,
+    }
 
 
-def run_hefesto_bml(params, run_dir, T_core, T_mantle_bottom, true_cmb_depth,
-                    rho_mantle_bottom=_RHO_S, n_points=20):
+def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
+                   rho_mantle_bottom=_RHO_S, n_points=20):
     bml_thickness = params['BML_thickness']
     Mg_bulk       = params['Mg#_bulk_bml']
     bml_top_depth = true_cmb_depth - bml_thickness
@@ -913,8 +703,7 @@ def run_hefesto_bml(params, run_dir, T_core, T_mantle_bottom, true_cmb_depth,
             break
 
         T_interface, Ra, thermal_state = compute_bml_thermal_state(
-            T_mantle_bottom, T_core, h_solid_km, rho_solid=rho_mantle_bottom)
-
+            T_mantle_bottom, T_core, h_solid_km, bml_top_depth, rho_solid=rho_mantle_bottom)
         if abs(T_interface - T_old) < 5.0:
             break
 
@@ -922,7 +711,7 @@ def run_hefesto_bml(params, run_dir, T_core, T_mantle_bottom, true_cmb_depth,
           f"h_sol={h_solid_km:.0f}km  h_liq={h_liquid_km:.0f}km  "
           f"T_int={T_interface:.0f}K  melt={pd['melting']}")
 
-    # ── Step 3a: HeFESTo solid BML ────────────────────────────────────────────
+    # ── Step 3a: nGibbs solid BML ─────────────────────────────────────────────
     solid_data = None
     if h_solid_km >= 1.0:
         n_sol   = max(int(n_points * h_solid_km / bml_thickness), 3)
@@ -936,35 +725,32 @@ def run_hefesto_bml(params, run_dir, T_core, T_mantle_bottom, true_cmb_depth,
             dT_ad = _ALPHA_S * T_mantle_bottom * g_mid / _CP_S * h_solid_km * 1000
             T_sol = np.linspace(T_mantle_bottom, T_mantle_bottom + dT_ad, n_sol)
 
-        p_s   = composition_from_params({'Mg#': Mg_solid, 'T_lit': T_mantle_bottom, 'P_lit': P_sol[0]})
-        O_s   = compute_oxygen(p_s)
-        ad_in = "".join(f"{P:.6f} 0.000000 {T:.6f}\n" for P, T in zip(P_sol, T_sol))
+        p_s = composition_from_params({'Mg#': Mg_solid, 'T_lit': T_mantle_bottom, 'P_lit': P_sol[0]})
+        O_s = compute_oxygen(p_s)
 
-        dir_s  = os.path.join(run_dir, "bml_solid")
-        fort56 = run_hefesto_single(dir_s,
-                 make_control_lines(p_s, O_s, f"{P_sol[0]:.4f},{P_sol[-1]:.4f},{n_sol},0,0,0,-1,0,0"),
-                 ad_in_content=ad_in)
-        _cleanup(dir_s)
-        if fort56 is None:
-            return None
-        raw_s = read_fort56(fort56)
-        if raw_s is None:
+        out_s = _ng_forward(P_sol, T_sol, _comp_values(p_s, O_s),
+                            NG_T_HEADERS, ['component_moles'])
+        pr     = _ng_props(out_s['component_moles'], P_sol, T_sol, ['rho', 'Vp', 'Vs'])
+        rho_s  = np.asarray(pr['rho'])
+        Vp_raw = np.asarray(pr['Vp'])
+        Vs_raw = np.asarray(pr['Vs'])
+
+        if not np.all(np.isfinite(rho_s)) or np.any(rho_s <= 0):
             return None
 
-        depth_s  = _pressure_to_depth(raw_s['P_GPa'], raw_s['rho'])
-        n_pts    = len(raw_s['P_GPa'])
-        Vp_s     = np.zeros(n_pts)
-        Vs_s     = np.zeros(n_pts)
-        phi_s    = np.zeros(n_pts)
-        for i in range(n_pts):
-            phi = compute_melt_fraction(float(raw_s['T_K'][i]), raw_s['P_GPa'][i], Mg_solid)
+        depth_s = np.interp(P_sol, _pres_gpa, _pres_depth)
+        Vp_s    = np.zeros(n_sol)
+        Vs_s    = np.zeros(n_sol)
+        phi_s   = np.zeros(n_sol)
+        for i in range(n_sol):
+            phi = compute_melt_fraction(float(T_sol[i]), P_sol[i], Mg_solid)
             phi_s[i] = phi
             Vp_s[i], Vs_s[i] = apply_melt_correction_pierru(
-                float(raw_s['Vp'][i]), float(raw_s['Vs'][i]), phi)
+                float(Vp_raw[i]), float(Vs_raw[i]), phi)
 
-        solid_data = {'depth_km': depth_s, 'P_GPa': raw_s['P_GPa'],
-                      'T_K': raw_s['T_K'], 'Vp': Vp_s, 'Vs': Vs_s,
-                      'rho': raw_s['rho'], 'phi': phi_s}
+        solid_data = {'depth_km': depth_s, 'P_GPa': P_sol,
+                      'T_K': T_sol, 'Vp': Vp_s, 'Vs': Vs_s,
+                      'rho': rho_s, 'phi': phi_s}
 
     # ── Step 3b: liquid BML (Thomas EoS, Vs=0, isothermal = T_core) ──────────
     liquid_data = None
@@ -976,8 +762,9 @@ def run_hefesto_bml(params, run_dir, T_core, T_mantle_bottom, true_cmb_depth,
         for i in range(n_liq):
             rho_liq[i], Vp_liq[i], _ = liquid_bml_properties(P_liq[i], T_core, Mg_liquid)
 
-        off = solid_data['depth_km'][-1] if solid_data is not None else 0.0
-        depth_liq = np.linspace(off, off + h_liquid_km, n_liq)
+        off = solid_data['depth_km'][-1] if solid_data is not None else np.interp(P_liq[0], _pres_gpa, _pres_depth)
+        depth_liq = np.interp(P_liq, _pres_gpa, _pres_depth)
+        depth_liq = np.maximum(depth_liq, off)   # keep monotonic across the interface
 
         liquid_data = {'depth_km': depth_liq, 'P_GPa': P_liq,
                        'T_K': np.full(n_liq, T_core),
@@ -993,10 +780,10 @@ def run_hefesto_bml(params, run_dir, T_core, T_mantle_bottom, true_cmb_depth,
     depth = cat('depth_km'); P_GPa = cat('P_GPa'); T_K  = cat('T_K')
     Vp    = cat('Vp');       Vs    = cat('Vs');     rho  = cat('rho'); phi = cat('phi')
 
-    oc_offset = depth[-1]
+    oc_offset = depth[-1] - depth[0]
     for i in range(len(Vs)):
         if Vs[i] == 0.0:
-            oc_offset = depth[i]; break
+            oc_offset = depth[i] - depth[0]; break
 
     return {
         'depth_km':                depth,
@@ -1051,22 +838,37 @@ def build_taup(fort56_data, model_name, samuel_cache, bml_data=None):
         bml_vp    = bml_data['Vp']
         bml_vs    = bml_data['Vs']
         bml_rho   = bml_data['rho']
-        outer_core_abs = bml_data.get('outer_core_depth_abs', bml_depth[-1])
-        bml_mask   = (bml_depth >= bml_top_depth) & (bml_depth <= true_cmb_depth)
-        solid_mask = bml_mask & (bml_depth < outer_core_abs)
-        liq_mask   = bml_mask & (bml_depth > outer_core_abs)
+        bml_mask  = (bml_depth >= bml_top_depth) & (bml_depth <= true_cmb_depth)
 
-        for d, vp, vs, r in zip(bml_depth[solid_mask], bml_vp[solid_mask],
-                                 bml_vs[solid_mask], bml_rho[solid_mask]):
+        d_b   = bml_depth[bml_mask]
+        vp_b  = bml_vp[bml_mask]
+        vs_b  = bml_vs[bml_mask]
+        rho_b = bml_rho[bml_mask]
+
+        # first index where Vs vanishes (melt correction can zero Vs inside the
+        # nominally solid layer, so locate the fluid boundary from the data itself)
+        zero = np.where(vs_b <= 1e-6)[0]
+        i0   = int(zero[0]) if len(zero) else len(d_b)
+
+        # solid part (Vs > 0)
+        for d, vp, vs, r in zip(d_b[:i0], vp_b[:i0], vs_b[:i0], rho_b[:i0]):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
 
-        idx_oc = min(np.searchsorted(bml_depth, outer_core_abs), len(bml_depth)-1)
-        f.write(f"{outer_core_abs:.3f}  {bml_vp[idx_oc]:.4f}  {bml_vs[idx_oc]:.4f}  {bml_rho[idx_oc]:.4f}\n")
-        f.write("outer-core\n")
-        f.write(f"{outer_core_abs:.3f}  {bml_vp[idx_oc]:.4f}  0.0000  {bml_rho[idx_oc]:.4f}\n")
-
-        for d, vp, r in zip(bml_depth[liq_mask], bml_vp[liq_mask], bml_rho[liq_mask]):
-            f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
+        if i0 < len(d_b):
+            # fluid starts inside the BML: discontinuity at d_b[i0]
+            d_oc = d_b[i0]
+            if i0 > 0:
+                vp_s, vs_s, rho_s = vp_b[i0-1], vs_b[i0-1], rho_b[i0-1]
+            else:
+                vp_s, vs_s, rho_s = man_Vp[-1], man_Vs[-1], man_rho[-1]
+            f.write(f"{d_oc:.3f}  {vp_s:.4f}  {vs_s:.4f}  {rho_s:.4f}\n")
+            f.write("outer-core\n")
+            for d, vp, r in zip(d_b[i0:], vp_b[i0:], rho_b[i0:]):
+                f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
+        else:
+            # fully solid BML: fluid boundary is the CMB itself
+            f.write(f"{true_cmb_depth:.3f}  {vp_b[-1]:.4f}  {vs_b[-1]:.4f}  {rho_b[-1]:.4f}\n")
+            f.write("outer-core\n")
 
         core_z   = samuel_cache['core_z']
         core_vp  = samuel_cache['core_vp']
@@ -1081,10 +883,9 @@ def build_taup(fort56_data, model_name, samuel_cache, bml_data=None):
 
 # ── mass and MoI ──────────────────────────────────────────────────────────────
 def compute_mass_and_moi(fort56_data, samuel_cache, bml_data):
-    R              = MARS_RADIUS_M
-    true_cmb_km    = samuel_cache['true_cmb_depth']
-    bml_top_km     = float(bml_data['depth_km'][0])
-    P_lit_depth_km = fort56_data.get('P_lit_depth_km', 147.0)  # absolute depth of P_lit
+    R           = MARS_RADIUS_M
+    true_cmb_km = samuel_cache['true_cmb_depth']
+    bml_top_km  = float(bml_data['depth_km'][0])
 
     # crust: Samuel profile from surface to crust base (~100 km)
     crust_z      = samuel_cache['crust_z']
@@ -1093,20 +894,10 @@ def compute_mass_and_moi(fort56_data, samuel_cache, bml_data):
     crust_r      = R - crust_z[crust_mask] * 1000
     crust_rho_si = crust_rho[crust_mask] * 1000
 
-    # lithosphere gap: 100 km to P_lit depth, use first HeFeSTo density
-    lit_base_km = 100.0
-    if P_lit_depth_km > lit_base_km + 1.0:
-        n_lit    = 8
-        lith_z   = np.linspace(lit_base_km, P_lit_depth_km, n_lit)
-        lith_r   = R - lith_z * 1000
-        lith_rho = np.full(n_lit, fort56_data['rho'][0] * 1000)
-    else:
-        lith_r = lith_rho = np.array([])
-
-    # mantle: HeFeSTo local depth → absolute radius via P_lit offset
-    hef_depth    = fort56_data['depth_km']   # local (0 = P_lit depth)
-    mantle_mask  = hef_depth <= (bml_top_km - P_lit_depth_km + 1.0)
-    man_r        = R - (hef_depth[mantle_mask] + P_lit_depth_km) * 1000
+    # mantle: depths are absolute (Samuel P-z scale), 100 km -> BML top
+    hef_depth    = fort56_data['depth_km']
+    mantle_mask  = (hef_depth >= 100.0) & (hef_depth <= bml_top_km + 1.0)
+    man_r        = R - hef_depth[mantle_mask] * 1000
     man_rho_si   = fort56_data['rho'][mantle_mask] * 1000
 
     # BML
@@ -1122,8 +913,8 @@ def compute_mass_and_moi(fort56_data, samuel_cache, bml_data):
     core_r      = R - core_z[core_mask] * 1000
     core_rho_si = core_rho[core_mask] * 1000
 
-    all_r   = np.concatenate([core_r, bml_r, man_r, lith_r, crust_r])
-    all_rho = np.concatenate([core_rho_si, bml_rho_si, man_rho_si, lith_rho, crust_rho_si])
+    all_r   = np.concatenate([core_r, bml_r, man_r, crust_r])
+    all_rho = np.concatenate([core_rho_si, bml_rho_si, man_rho_si, crust_rho_si])
     idx     = np.argsort(all_r)
     all_r, all_rho = all_r[idx], all_rho[idx]
 
@@ -1203,12 +994,12 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
                 tt_total += val
                 tt_n     += 1
 
-    tt_misfit = tt_total / tt_n if tt_n > 0 else 999.0
+    tt_misfit = tt_total if tt_n > 0 else 999.0
     if not np.isfinite(tt_misfit):
         tt_misfit = 999.0
 
     solidus_penalty = compute_solidus_penalty(fort56_data, params) if params else 0.0
-    total_misfit = tt_misfit + solidus_penalty
+    total_misfit = tt_misfit + solidus_penalty + mass_sigma + moi_sigma
     if not np.isfinite(total_misfit):
         total_misfit = 999.0
 
@@ -1225,12 +1016,9 @@ def forward(params, run_dir, model_name, samuel_cache):
     bml_top_km     = true_cmb_depth - params['BML_thickness']
     P_bml_top      = float(pressure_mars(bml_top_km))
 
-    fort56, fort56_data = run_hefesto(params, run_dir, P_bml_top=P_bml_top)
+    fort56_data = run_ngibbs(params, P_bml_top=P_bml_top)
     if fort56_data is None:
         return None, None, None, None, None
-
-    # store P_lit absolute depth for correct radius computation in compute_mass_and_moi
-    fort56_data['P_lit_depth_km'] = float(np.interp(params['P_lit'], _pres_gpa, _pres_depth))
 
     T_profile = fort56_data.get('T_profile')
     P_profile = fort56_data.get('P_profile')
@@ -1239,11 +1027,11 @@ def forward(params, run_dir, model_name, samuel_cache):
     rho_mantle_bottom = float(fort56_data['rho'][-1])   # mantle bottom density → proxy for solid BML ρ
     print(f"  T_mantle_bottom={T_mantle_bottom:.1f}K  P_bml_top={P_bml_top:.2f}GPa  rho_bot={rho_mantle_bottom:.4f}")
 
-    bml_raw = run_hefesto_bml(params, run_dir,
-                              T_core=params['T_core'],
-                              T_mantle_bottom=T_mantle_bottom,
-                              true_cmb_depth=true_cmb_depth,
-                              rho_mantle_bottom=rho_mantle_bottom)
+    bml_raw = run_ngibbs_bml(params,
+                             T_core=params['T_core'],
+                             T_mantle_bottom=T_mantle_bottom,
+                             true_cmb_depth=true_cmb_depth,
+                             rho_mantle_bottom=rho_mantle_bottom)
     if bml_raw is None:
         print("  BML failed → reject"); return None, None, None, None, None
 
@@ -1442,6 +1230,8 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             'Mg_liquid':      current_components.get('Mg_liquid'),
             'T_mantle_bottom':current_components.get('T_mantle_bottom'),
             'T_interface':    current_components.get('T_interface'),
+            'proposal_S_lit':      _NG_S_LOG['last'],
+            'proposal_S_in_range': bool(_NG_S_LOG['last_in_range']),
             'accepted':       bool(accepted),
             'accept_rate':    accept_rate,
         })
@@ -1452,6 +1242,16 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     print(f"\nChain {chain_id} done  "
           f"accept_rate={accept_count/n_steps*100:.1f}%  "
           f"misfit={current_misfit:.4f}")
+
+    s_all = np.asarray(_NG_S_LOG['all'])
+    s_fin = s_all[np.isfinite(s_all)]
+    if len(s_fin):
+        print(f"  S_lit proposals: n={len(s_fin)}  "
+              f"range=[{s_fin.min():.4f}, {s_fin.max():.4f}]  "
+              f"below {NG_S_MIN}: {_NG_S_LOG['n_below']} "
+              f"({100*_NG_S_LOG['n_below']/len(s_fin):.1f}%)  "
+              f"above {NG_S_MAX}: {_NG_S_LOG['n_above']} "
+              f"({100*_NG_S_LOG['n_above']/len(s_fin):.1f}%)")
 
 # ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":

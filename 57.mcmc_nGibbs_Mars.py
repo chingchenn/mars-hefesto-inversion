@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-57_mcmc_nGibbs_Mars.py
+57_mcmc_nGibbs_Mars.py chain_a24
 MCMC inversion for Mars interior structure using nGibbs (HeFESTo emulator) + BML physics
 """
 
@@ -50,7 +50,7 @@ GAMMA            = 1.1
 MARS_MASS_OBS    = 6.4171e23
 MARS_MASS_SIGMA  = MARS_MASS_OBS * 0.01
 MOI_OBS          = 0.36379   # Konopliv et al. 2016 (used in Samuel 2021/2023)
-MOI_SIGMA        = 0.0005    # 5× measurement σ, accounts for model discretization
+MOI_SIGMA        = 0.0015    
 MCMC_TEMPERATURE = 1.0
 
 TRUE_CMB_DEPTH = 1743.3   # km  true CMB
@@ -215,8 +215,6 @@ SAMUEL_DATA = {
 }
 
 # ── gravity and pressure profiles (computed once at import) ───────────────────
-def _build_gravity_pressure():
-    G = 6.674e-11
 def _build_gravity_pressure():
     G = 6.674e-11
     data = np.loadtxt(SAMUEL_RHO_PROFILE_PATH)
@@ -486,14 +484,21 @@ _ALPHA_S = 2.0e-5   # K⁻¹, thermal expansion (solid BML)
 _RHO_S   = 3800.0   # kg/m³
 _KAPPA_S = 1.0e-6   # m²/s, thermal diffusivity
 _CP_S    = 1200.0   # J/kg/K
-_RA_C    = 1000.0   # critical Rayleigh number
+_VSTAR = 3.0e-6      # m³/mol  (Drilleau 2026 Table 1: V* 0–10 cm³/mol, inverted)
+_P_REF = 3.0e9       # Pa      (Drilleau 2021/2026 reference pressure)
+_RA_C  = 1.0e3       
 
-def compute_bml_thermal_state(T_mantle_bottom, T_core, h_solid_km, rho_solid=_RHO_S):
-    dT  = max(T_core - T_mantle_bottom, 0.0)
-    eta = _ETA0 * np.exp(_ESTAR / _R_GAS * (1.0/max(T_mantle_bottom, 400) - 1.0/_T0_ETA))
-    h   = h_solid_km * 1000.0   # m
-    g   = gravity_mars(TRUE_CMB_DEPTH - h_solid_km / 2)
-    Ra  = _ALPHA_S * rho_solid * g * dT * h**3 / (_KAPPA_S * eta)
+def compute_bml_thermal_state(T_mantle_bottom, T_core, h_solid_km, bml_top_km,
+                              rho_solid=_RHO_S):
+    z_mid = bml_top_km + h_solid_km / 2.0            # 固態 BML 中心深度
+    P_mid = float(pressure_mars(z_mid)) * 1e9        # Pa
+    T_mid = 0.5 * (T_mantle_bottom + T_core)         # 層中心溫度
+    dT    = max(T_core - T_mantle_bottom, 0.0)
+    eta   = _ETA0 * np.exp((_ESTAR + P_mid*_VSTAR) / (_R_GAS * T_mid)
+                           - (_ESTAR + _P_REF*_VSTAR) / (_R_GAS * _T0_ETA))
+    h     = h_solid_km * 1000.0
+    g     = gravity_mars(z_mid)
+    Ra    = _ALPHA_S * rho_solid * g * dT * h**3 / (_KAPPA_S * eta)
 
     if Ra < _RA_C:
         return T_core, Ra, 'conductive'
@@ -698,8 +703,7 @@ def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
             break
 
         T_interface, Ra, thermal_state = compute_bml_thermal_state(
-            T_mantle_bottom, T_core, h_solid_km, rho_solid=rho_mantle_bottom)
-
+            T_mantle_bottom, T_core, h_solid_km, bml_top_depth, rho_solid=rho_mantle_bottom)
         if abs(T_interface - T_old) < 5.0:
             break
 
@@ -990,12 +994,12 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
                 tt_total += val
                 tt_n     += 1
 
-    tt_misfit = tt_total / tt_n if tt_n > 0 else 999.0
+    tt_misfit = tt_total if tt_n > 0 else 999.0
     if not np.isfinite(tt_misfit):
         tt_misfit = 999.0
 
     solidus_penalty = compute_solidus_penalty(fort56_data, params) if params else 0.0
-    total_misfit = tt_misfit + solidus_penalty
+    total_misfit = tt_misfit + solidus_penalty + mass_sigma + moi_sigma
     if not np.isfinite(total_misfit):
         total_misfit = 999.0
 

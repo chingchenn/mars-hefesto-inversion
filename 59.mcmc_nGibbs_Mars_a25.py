@@ -5,13 +5,16 @@ MCMC inversion for Mars interior structure using nGibbs (HeFESTo emulator) + BML
 """
 
 import os
-import re
 import numpy as np
 import json
 import argparse
-import glob
 import sys
+import faulthandler
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+faulthandler.enable(file=sys.stderr, all_threads=True)
 import torch
+torch.set_num_threads(1)
 from pathlib import Path
 from datetime import datetime
 from scipy.optimize import fsolve, brentq
@@ -51,7 +54,6 @@ MOI_SIGMA        = 0.0005
 MOI_BIAS         = 0.00136   # pipeline systematic: pure-Samuel PanelJ through this
                       # integrator gives MoI=0.36515 vs obs 0.36379 (budget test)
 MCMC_TEMPERATURE = 1.0    
-_DTDP_LIQ = 10.0      # K/GPa, liquid BML adiabat slope
 
 TRUE_CMB_DEPTH = None   # km  true CMB
 
@@ -86,6 +88,18 @@ STEP = {
 'Mg#_bulk_bml': 0.06,
 'BML_thickness': 25.0,
 }
+
+CHAIN_KEYS = (
+    'misfit_tt', 'misfit_solidus', 'grav_sigma', 'mass_sigma', 'moi_sigma',
+    'moi_pred', 'M_pred','upper_contrast', 'lower_contrast', 'Ra', 'thermal_state',
+    'h_solid_km', 'h_liquid_km', 'melting', 'Mg_solid', 'Mg_liquid',
+    'rho_solid_bml', 'rho_liquid_bml', 'P_interface',
+    'T_mantle_bottom', 'T_interface', 'tt_n_ev', 'tt_n_ph', 'tt_n_miss',
+)
+BML_KEYS = ('Ra', 'thermal_state', 'h_solid_km', 'h_liquid_km', 'melting',
+            'Mg_solid', 'Mg_liquid', 'T_interface',
+            'rho_solid_bml', 'rho_liquid_bml', 'P_interface',
+            'upper_contrast', 'lower_contrast')
 
 # ── Samuel 2023 paths ─────────────────────────────────────────────────────────
 SAMUEL_DATA_DIR = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
@@ -301,7 +315,8 @@ MG_DUNCAN_REF  = 0.75
 # Kono 2025: the BML must be denser than the mantle above and lighter than the core
 # below, else it overturns on a timescale << 4.5 Gyr. This is a hard rejection.
 
-REJECT_GRAV_UNSTABLE = True
+REJECT_GRAV_UNSTABLE = False
+GRAV_SCALE = 0.15        # g/cm3, ~ the Fo end-member EoS systematic (old-new = 0.18)
 _GRAV_FAIL = {'upper': 0, 'lower': 0}
 
 def solidus_duncan2018(P_GPa):
@@ -529,7 +544,7 @@ _ETA0    = 1e21      # Pa·s, reference viscosity
 _ESTAR   = 3e5       # J/mol, activation energy
 _T0_ETA  = 1600.0   # K, reference temperature
 _ALPHA_S = 2.0e-5   # K⁻¹, thermal expansion (solid BML)
-_RHO_S   = 3800.0   # kg/m³
+_RHO_S_RA = 3800.0  # kg/m³
 _KAPPA_S = 1.0e-6   # m²/s, thermal diffusivity
 _CP_S    = 1200.0   # J/kg/K
 _VSTAR = 3.0e-6      # m³/mol  (Drilleau 2026 Table 1: V* 0–10 cm³/mol, inverted)
@@ -543,7 +558,7 @@ _P_REF = 3.0e9       # Pa      (Drilleau 2021/2026 reference pressure)
 _RA_C  = 1.0e5
 
 def compute_bml_thermal_state(T_mantle_bottom, T_interface, h_solid_km, bml_top_km,
-                              rho_solid=_RHO_S):
+                              rho_solid=_RHO_S_RA):
     """Ra of the solid sublayer. Boundary temps are FIXED by the neighbours
     (top: mantle bottom, bottom: solid/liquid interface). Ra selects the
     internal profile SHAPE only — it never modifies boundary temperatures."""
@@ -558,40 +573,107 @@ def compute_bml_thermal_state(T_mantle_bottom, T_interface, h_solid_km, bml_top_
     Ra    = _ALPHA_S * rho_solid * g * dT * h**3 / (_KAPPA_S * eta)
     return Ra, ('conductive' if Ra < _RA_C else 'convective')
 
-# ── Liquid BML EoS (Thomas 2012 Fa + Thomas 2013 Fo, linear mixing) ───────────
+# ── Liquid BML EoS (Thomas 2012 Fa + Thomas 2013 Fo, volume mixing) ───────────
+
+_RHO_S_CONST = 4.17     # g/cm3, solid BML density from nGibbs at a31 posterior XS
+_M_FO = 140.694
+_M_FA = 203.777
+def mole_to_volume_fraction(f_solid, XS, XL, rho_S, rho_L):
+    # lever rule gives MOLE fractions; thickness needs VOLUME fractions.
+    # M_S != M_L because XS != XL, and rho_S != rho_L, so the two differ.
+    M_S = XS * _M_FO + (1.0 - XS) * _M_FA
+    M_L = XL * _M_FO + (1.0 - XL) * _M_FA
+    V_S = f_solid         * M_S / rho_S
+    V_L = (1.0 - f_solid) * M_L / rho_L
+    return V_S / (V_S + V_L)
+
+_FO = dict(rho0=2.597, KS0=16.41, Ksp=7.37, gam0=0.396, q=-2.02, Cv=1737.36, T0=2273.0, M=140.694)
+_FA = dict(rho0=3.699, KS0=21.99, Ksp=7.28, gam0=0.412, q=-0.95, Cv=1122.73, T0=1573.0, M=203.777)
+
+def _rho_endmember(em, P_Pa, T_K):
+    # 3BM is NON-monotonic on strong expansion: P(rho) has a minimum near
+    # rho ~ 0.75*rho0 and turns positive again below it. Bracketing from
+    # 0.4*rho0 therefore fails whenever P_Pa < P(0.4*rho0) ~ 0.3-0.9 GPa.
+    # 0.85*rho0 sits to the right of that minimum for T = 1000-4000 K and
+    # P(0.85*rho0) < 0 there, so f(a) < 0 is guaranteed for any P_Pa >= 0.
+    def f(rho):
+        x   = 0.5 * ((rho/em['rho0'])**(2/3) - 1)
+        PS  = 3*em['KS0']*x*(1+2*x)**2.5 * (1 + 1.5*(em['Ksp']-4)*x) * 1e9
+        gam = em['gam0'] * (em['rho0']/rho)**em['q']
+        return PS + gam * rho*1e3 * em['Cv'] * (T_K - em['T0']) - P_Pa
+    a, b = em['rho0']*0.85, em['rho0']*4.0
+    fa, fb = f(a), f(b)
+    if not (np.isfinite(fa) and np.isfinite(fb)) or fa*fb > 0:
+        print(f"  _rho_endmember bracket failed: P={P_Pa/1e9:.3f} GPa  T={T_K:.1f} K  "
+              f"f(a)={fa/1e9:+.3f}  f(b)={fb/1e9:+.3f}")
+        return np.nan
+    return brentq(f, a, b, xtol=1e-10)
+
+def _V_mix(P_Pa, T_K, Mg):
+    rho_Fo = _rho_endmember(_FO, P_Pa, T_K)
+    rho_Fa = _rho_endmember(_FA, P_Pa, T_K)
+    if not (np.isfinite(rho_Fo) and np.isfinite(rho_Fa)):
+        return np.nan
+    return Mg*_FO['M']/rho_Fo + (1.0-Mg)*_FA['M']/rho_Fa
+
 def liquid_bml_properties(P_GPa, T_K, Mg_liquid):
-    # Fo end-member: Thomas & Asimow 2013, 3BM/MG, T0=2273K
-    rho0_Fo=2.806; KS0_Fo=17.5; Ksp_Fo=5.3; gam0_Fo=0.62; q_Fo=-0.8; Cv_Fo=900.0; T0_Fo=2273.0
-    # Fa end-member: Thomas et al. 2012, 3BM/MG, T0=1573K
-    rho0_Fa=3.699; KS0_Fa=21.99; Ksp_Fa=7.28; gam0_Fa=0.412; q_Fa=-0.95; Cv_Fa=670.0; T0_Fa=1573.0
-
-    Mg   = float(np.clip(Mg_liquid, 0.0, 1.0))
-    rho0 = Mg*rho0_Fo + (1-Mg)*rho0_Fa
-    KS0  = Mg*KS0_Fo  + (1-Mg)*KS0_Fa
-    Ksp  = Mg*Ksp_Fo  + (1-Mg)*Ksp_Fa
-    gam0 = Mg*gam0_Fo + (1-Mg)*gam0_Fa
-    q    = Mg*q_Fo    + (1-Mg)*q_Fa
-    Cv   = Mg*Cv_Fo   + (1-Mg)*Cv_Fa
-    T0   = Mg*T0_Fo   + (1-Mg)*T0_Fa
-    P_Pa = P_GPa * 1e9
-
-    def P_of_rho(rho):
-        f   = 0.5 * ((rho/rho0)**(2/3) - 1)
-        PS  = 3*KS0*f*(1+2*f)**2.5 * (1 + 1.5*(Ksp-4)*f) * 1e9
-        gam = gam0 * (rho0/rho)**q
-        ES  = 4.5*KS0/rho0*(f**2 + (Ksp-4)*f**3) * 1e9   # J/kg
-        Pth = gam * rho*1e3 * Cv * (T_K - T0)
-        return PS + Pth - P_Pa
+    Mg     = float(np.clip(Mg_liquid, 0.0, 1.0))
+    x_fa   = 1.0 - Mg
+    P_Pa   = P_GPa * 1e9
+    M_mix  = Mg*_FO['M'] + x_fa*_FA['M']
+    Cv_mix = (Mg*_FO['M']*_FO['Cv'] + x_fa*_FA['M']*_FA['Cv']) / M_mix   # J/kg/K
+    dP, dT = 0.05e9, 5.0
 
     try:
-        rho = brentq(P_of_rho, rho0*0.5, rho0*3.0, xtol=1e-6)
-    except Exception:
-        return rho0, 4.0, 0.0
+        V    = _V_mix(P_Pa,      T_K,      Mg)
+        V_Pp = _V_mix(P_Pa + dP, T_K,      Mg)
+        V_Pm = _V_mix(P_Pa - dP, T_K,      Mg)
+        V_Tp = _V_mix(P_Pa,      T_K + dT, Mg)
+        V_Tm = _V_mix(P_Pa,      T_K - dT, Mg)
+        if not all(np.isfinite([V, V_Pp, V_Pm, V_Tp, V_Tm])):
+            print(f"  liquid EoS failed  P={P_GPa:.2f}GPa T={T_K:.0f}K Mg_L={Mg:.3f}")
+            return np.nan, np.nan, 0.0
+    except Exception as e:
+        print(f"  liquid EoS failed  P={P_GPa:.2f}GPa T={T_K:.0f}K Mg_L={Mg:.3f}: {e}")
+        return np.nan, np.nan, 0.0
 
-    dr  = rho * 0.001
-    KS  = abs(rho * (P_of_rho(rho+dr) - P_of_rho(rho-dr)) / (2*dr)) / 1e9   # GPa
-    Vp  = float(np.sqrt(KS * 1e9 / (rho * 1e3))) / 1000.0   # km/s
+    rho    = M_mix / V          # g/cm3
+    rho_si = rho * 1e3          # kg/m3
+    K_T    = -V * (2*dP) / (V_Pp - V_Pm)          # Pa, isothermal
+    alpha  = (V_Tp - V_Tm) / (2*dT) / V           # 1/K
+    gam    = alpha * K_T / (rho_si * Cv_mix)      # Grueneisen of the mixture
+    K_S    = K_T * (1.0 + alpha * gam * T_K)      # adiabatic: seismic waves need this
+
+    if not (np.isfinite(rho) and rho > 0 and np.isfinite(K_S) and K_S > 0):
+        print(f"  liquid EoS unphysical  rho={rho} K_S={K_S}")
+        return np.nan, np.nan, 0.0
+
+    Vp = float(np.sqrt(K_S / rho_si)) / 1000.0    # km/s
     return float(rho), Vp, 0.0
+
+def liquid_adiabat_dTdP(P_GPa, T_K, Mg_liquid):
+    # dT/dP|_S = gamma * T / K_S, in K/GPa -- replaces the hardwired _DTDP_LIQ
+    if not (np.isfinite(P_GPa) and np.isfinite(T_K) and 0.5 < P_GPa < 100.0):
+        print(f"  liquid_adiabat_dTdP bad args: P={P_GPa} T={T_K} Mg={Mg_liquid}")
+        return np.nan
+    Mg     = float(np.clip(Mg_liquid, 0.0, 1.0))
+    P_Pa   = P_GPa * 1e9
+    M_mix  = Mg*_FO['M'] + (1.0-Mg)*_FA['M']
+    Cv_mix = (Mg*_FO['M']*_FO['Cv'] + (1.0-Mg)*_FA['M']*_FA['Cv']) / M_mix
+    dP, dT = 0.05e9, 5.0
+    V      = _V_mix(P_Pa, T_K, Mg)
+    V_Pp   = _V_mix(P_Pa + dP, T_K, Mg)
+    V_Pm   = _V_mix(P_Pa - dP, T_K, Mg)
+    V_Tp   = _V_mix(P_Pa, T_K + dT, Mg)
+    V_Tm   = _V_mix(P_Pa, T_K - dT, Mg)
+    if not all(np.isfinite([V, V_Pp, V_Pm, V_Tp, V_Tm])):
+        return np.nan
+    rho_si = M_mix / V * 1e3
+    K_T    = -V * (2*dP) / (V_Pp - V_Pm)
+    alpha  = (V_Tp - V_Tm) / (2*dT) / V
+    gam    = alpha * K_T / (rho_si * Cv_mix)
+    K_S    = K_T * (1.0 + alpha * gam * T_K)
+    return gam * T_K / K_S * 1e9
 
 # ── composition ───────────────────────────────────────────────────────────────
 def composition_from_params(params):
@@ -717,16 +799,16 @@ def run_ngibbs(params, P_bml_top=None):
 
 
 def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
-                   rho_mantle_bottom=_RHO_S, n_points=20):
+                   rho_solid_bml_si=_RHO_S_RA, n_points=20):
     bml_thickness = params['BML_thickness']
     Mg_bulk       = params['Mg#_bulk_bml']
     bml_top_depth = true_cmb_depth - bml_thickness
     P_top         = max(float(pressure_mars(bml_top_depth)), 5.0)
     P_bottom      = float(pressure_mars(true_cmb_depth))
-    P_mid         = (P_top + P_bottom) / 2.0
 
     # ── self-consistent iteration (pure analytical, < 0.01s) ─────────────────
-    T_interface   = T_core       # initial guess: conductive → T_interface = T_core
+    P_int         = P_bottom     # initial guess: interface at CMB -> zero liquid
+    T_interface   = T_core
     h_solid_km    = bml_thickness
     h_liquid_km   = 0.0
     Mg_solid      = Mg_bulk
@@ -736,40 +818,59 @@ def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
     pd            = {'melting': False, 'T_solidus': np.nan}
 
     for _ in range(10):
-        T_old = T_interface
-        pd = bml_phase_diagram(T_interface, P_mid, Mg_bulk)
+        T_old, P_old = T_interface, P_int
+        pd = bml_phase_diagram(T_interface, P_int, Mg_bulk)
         if pd is None:
             return None
-        if not pd['melting']:                       # 全固: 層底直接接核
+        if not pd['melting']:                       # 全固
             h_solid_km, h_liquid_km = bml_thickness, 0.0
-            Mg_solid, Mg_liquid    = Mg_bulk, np.nan
-            T_interface = T_core
+            Mg_solid, Mg_liquid     = Mg_bulk, np.nan
+            T_interface, P_int      = T_core, P_bottom
             break
         elif pd['f_solid'] < 1e-3:                  # 全熔
             h_solid_km, h_liquid_km = 0.0, bml_thickness
-            Mg_solid, Mg_liquid    = np.nan, Mg_bulk
-            Ra, thermal_state      = np.nan, 'molten'
-            T_interface = T_core - _DTDP_LIQ * (P_bottom - P_top)
+            Mg_solid, Mg_liquid     = np.nan, Mg_bulk
+            Ra, thermal_state       = np.nan, 'molten'
+            dTdP = liquid_adiabat_dTdP(P_bottom, T_core, Mg_bulk)
+            if not np.isfinite(dTdP):
+                return None
+            T_interface = T_core - dTdP * (P_bottom - P_top)
+            P_int       = P_top
             break
         else:                                       # 分層
-            h_solid_km  = max(bml_thickness * pd['f_solid'],  0.0)
-            h_liquid_km = max(bml_thickness * pd['f_liquid'], 0.0)
+            rho_L_int, _, _ = liquid_bml_properties(P_int, T_interface, pd['XL'])
+            if not np.isfinite(rho_L_int):
+                return None
+            phi_S = mole_to_volume_fraction(pd['f_solid'], pd['XS'], pd['XL'],
+                                            _RHO_S_CONST, rho_L_int)
+            h_solid_km  = max(bml_thickness * phi_S,         0.0)
+            h_liquid_km = max(bml_thickness * (1.0 - phi_S), 0.0)
             Mg_solid, Mg_liquid = pd['XS'], pd['XL']
+
         if h_solid_km < 1.0:
             h_solid_km, h_liquid_km = 0.0, bml_thickness
+            Mg_solid, Mg_liquid     = np.nan, Mg_bulk
             Ra, thermal_state       = np.nan, 'molten'
+            dTdP = liquid_adiabat_dTdP(P_bottom, T_core, Mg_bulk)
+            if not np.isfinite(dTdP):
+                return None
+            T_interface = T_core - dTdP * (P_bottom - P_top)
+            P_int = P_top
             break
-        # 界面溫度 = T_core − 液體絕熱降 (Ra 不再參與)
-        P_int = P_top + (P_bottom - P_top) * h_solid_km / bml_thickness
-        T_interface = T_core - _DTDP_LIQ * (P_bottom - P_int)
-        if abs(T_interface - T_old) < 5.0:
+
+        P_int       = P_top + (P_bottom - P_top) * h_solid_km / bml_thickness
+        dTdP = liquid_adiabat_dTdP(P_bottom, T_core, pd['XL'])
+        if not np.isfinite(dTdP):
+            return None
+        T_interface = T_core - dTdP * (P_bottom - P_int)
+        if abs(T_interface - T_old) < 5.0 and abs(P_int - P_old) < 0.02:
             break
 
     # Ra 事後診斷 (descriptor, not driver)
     if h_solid_km >= 1.0:
         Ra, thermal_state = compute_bml_thermal_state(
             T_mantle_bottom, T_interface, h_solid_km, bml_top_depth,
-            rho_solid=rho_mantle_bottom)
+            rho_solid=rho_solid_bml_si)
 
     print(f"  BML: Ra={Ra:.1e} [{thermal_state}]  "
           f"h_sol={h_solid_km:.0f}km  h_liq={h_liquid_km:.0f}km  "
@@ -819,9 +920,7 @@ def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
         P_liq   = np.linspace(P_top + (P_bottom-P_top)*h_solid_km/bml_thickness, P_bottom, n_liq)
         rho_liq = np.zeros(n_liq)
         Vp_liq  = np.zeros(n_liq)
-        T_liq_arr = np.linspace(T_interface if h_solid_km >= 1.0
-                                else T_core - _DTDP_LIQ*(P_bottom-P_top),
-                                T_core, n_liq)
+        T_liq_arr = np.linspace(T_interface, T_core, n_liq)
         for i in range(n_liq):
             rho_liq[i], Vp_liq[i], _ = liquid_bml_properties(P_liq[i], T_liq_arr[i], Mg_liquid)
 
@@ -870,6 +969,9 @@ def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
         'Mg_liquid':               Mg_liquid if not np.isnan(Mg_liquid) else -1.0,
         'melting':                 pd['melting'],
         'T_interface':             T_interface,
+        'rho_solid_bml':           float(np.mean(solid_data['rho']))  if solid_data  is not None else -1.0,
+        'rho_liquid_bml':          float(np.mean(liquid_data['rho'])) if liquid_data is not None else -1.0,
+        'P_interface':             float(P_int),
     }
 
 
@@ -1025,7 +1127,7 @@ def compute_solidus_penalty(fort56_data, params):
 
 # ── misfit ────────────────────────────────────────────────────────────────────
 def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
-                   mass_sigma=0.0, moi_sigma=0.0):
+                   mass_sigma=0.0, moi_sigma=0.0, grav_sigma=0.0):
     phases_std   = ['P', 'S', 'pP', 'sP', 'PP', 'PPP', 'SS', 'SSS', 'sS', 'ScS', 'SKS']
     phases_pdiff = phases_std + ['Pdiff']
 
@@ -1098,16 +1200,17 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
         tt_misfit += 10.0 * (n_ev_expected - tt_n_ev)
 
     solidus_penalty = compute_solidus_penalty(fort56_data, params) if params else 0.0
-    total_misfit = tt_misfit + solidus_penalty + mass_sigma + moi_sigma
+    total_misfit = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma
     if not np.isfinite(total_misfit):
         total_misfit = 999.0
 
     print(f"  TT={tt_misfit:.4f}(events={tt_n_ev}/{n_ev_expected}, phases={tt_n_ph}, miss={tt_n_miss})  "
           f"solidus={solidus_penalty:.4f}  mass={mass_sigma:.2f}σ  "
-          f"moi={moi_sigma:.2f}σ  total={total_misfit:.4f}")
+          f"moi={moi_sigma:.2f}σ  grav={grav_sigma:.2f}σ  total={total_misfit:.4f}")
 
     return total_misfit, tt_n_ph, {
-        'tt': tt_misfit, 'solidus': solidus_penalty,
+        'misfit_tt': tt_misfit, 'misfit_solidus': solidus_penalty,
+        'grav_sigma': grav_sigma,
         'tt_n_ev': tt_n_ev, 'tt_n_ph': tt_n_ph, 'tt_n_miss': tt_n_miss,
     }
 
@@ -1132,7 +1235,7 @@ def forward(params, run_dir, model_name, samuel_cache):
                              T_core=params['T_core'],
                              T_mantle_bottom=T_mantle_bottom,
                              true_cmb_depth=true_cmb_depth,
-                             rho_mantle_bottom=rho_mantle_bottom)
+                             rho_solid_bml_si=_RHO_S_CONST * 1000.0)   # 4.097 g/cc -> kg/m3
     if bml_raw is None:
         print("  BML failed → reject"); return None, None, None, None, None
 
@@ -1150,7 +1253,9 @@ def forward(params, run_dir, model_name, samuel_cache):
     print(f"  density contrasts: upper={bml_raw['upper_contrast']:+.4f}  "
           f"lower={bml_raw['lower_contrast']:+.4f}")
 
-    if REJECT_GRAV_UNSTABLE and (bml_raw['upper_contrast'] <= 0.0 or bml_raw['lower_contrast'] <= 0.0):
+    grav_sigma = (max(0.0, -bml_raw['upper_contrast']) +
+                  max(0.0, -bml_raw['lower_contrast'])) / GRAV_SCALE
+    if REJECT_GRAV_UNSTABLE and grav_sigma > 0:
         if bml_raw['upper_contrast'] <= 0.0: _GRAV_FAIL['upper'] += 1
         if bml_raw['lower_contrast'] <= 0.0: _GRAV_FAIL['lower'] += 1
         print("  BML gravitationally unstable → reject (Kono 2025)")
@@ -1171,23 +1276,15 @@ def forward(params, run_dir, model_name, samuel_cache):
 
     misfit, n_data, components = compute_misfit(
         taup_model, SAMUEL_DATA, fort56_data, bml_data=bml_data, params=params,
-        mass_sigma=mass_sigma, moi_sigma=moi_sigma)
+        mass_sigma=mass_sigma, moi_sigma=moi_sigma, grav_sigma=grav_sigma)
 
-    components['upper_contrast']  = bml_data.get('upper_contrast')
-    components['lower_contrast']  = bml_data.get('lower_contrast')
+    
+    components.update({k: bml_data.get(k) for k in BML_KEYS})
     components['mass_sigma']      = mass_sigma
     components['moi_sigma']       = moi_sigma
     components['moi_pred']        = moi_pred      
-    components['M_pred']          = M_pred       
-    components['Ra']              = bml_data.get('Ra')
-    components['thermal_state']   = bml_data.get('thermal_state')
-    components['h_solid_km']      = bml_data.get('h_solid_km')
-    components['h_liquid_km']     = bml_data.get('h_liquid_km')
-    components['melting']         = bml_data.get('melting', False)
-    components['Mg_solid']        = bml_data.get('Mg_solid')
-    components['Mg_liquid']       = bml_data.get('Mg_liquid')
+    components['M_pred']          = M_pred     
     components['T_mantle_bottom'] = T_mantle_bottom
-    components['T_interface']     = bml_data.get('T_interface')
     
 
     return misfit, n_data, components, fort56_data, bml_data
@@ -1230,24 +1327,12 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
 
     step_start = len(chain)
     accept_count = 0
-    current_components = {'tt': 999.0, 'solidus': 0.0,
-                          'mass_sigma': None, 'moi_sigma': None,
-                          'upper_contrast': None, 'lower_contrast': None}
+    current_components = {k: None for k in CHAIN_KEYS}          # 佔位
 
     if chain:
         current_misfit = chain[-1]['misfit']
         accept_count   = sum(1 for s in chain if s.get('accepted', False))
-        current_components = {
-            'tt':             chain[-1].get('misfit_tt',      999.0),
-            'solidus':        chain[-1].get('misfit_solidus', 0.0),
-            'mass_sigma':     chain[-1].get('mass_sigma'),
-            'moi_sigma':      chain[-1].get('moi_sigma'),
-            'moi_pred':       chain[-1].get('moi_pred'),   
-            'M_pred':         chain[-1].get('M_pred'),      
-            'upper_contrast': chain[-1].get('upper_contrast'),
-            'lower_contrast': chain[-1].get('lower_contrast'),
-            'tt_n_ev':        chain[-1].get('tt_n_ev'),
-        }
+        current_components = {k: chain[-1].get(k) for k in CHAIN_KEYS}
     else:
         run_dir    = os.path.join(chain_dir, "step_current")
         model_name = f"mcmc_{prefix}_c{chain_id:02d}_current"
@@ -1281,9 +1366,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         if proposed_misfit is None or proposed_misfit >= 990.0:
             accepted        = False
             proposed_misfit = 999.0
-            components      = {'tt': 999.0, 'solidus': 0.0,
-                               'mass_sigma': None, 'moi_sigma': None,
-                               'upper_contrast': None, 'lower_contrast': None}
+
         else:
             delta = proposed_misfit - current_misfit
             accepted = delta <= 0 or np.log(rng.uniform()) < -delta / MCMC_TEMPERATURE
@@ -1325,38 +1408,22 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
               f"uc={f'{uc:+.4f}' if uc is not None else 'N/A'}  "
               f"({elapsed:.0f}s)")
 
-        chain.append({
-            'step':           step + 1,
-            'params':         current,
-            'misfit':         current_misfit,
-            'misfit_tt':      current_components.get('tt',      999.0),
-            'misfit_solidus': current_components.get('solidus', 0.0),
-            'mass_sigma':     current_components.get('mass_sigma'),
-            'moi_sigma':      current_components.get('moi_sigma'),
-            'moi_pred':       current_components.get('moi_pred'),   
-            'M_pred':         current_components.get('M_pred'),     
-            'upper_contrast': current_components.get('upper_contrast'),
-            'lower_contrast': current_components.get('lower_contrast'),
-            'Ra':             current_components.get('Ra'),
-            'thermal_state':  current_components.get('thermal_state'),
-            'h_solid_km':     current_components.get('h_solid_km'),
-            'h_liquid_km':    current_components.get('h_liquid_km'),
-            'melting':        current_components.get('melting'),
-            'Mg_solid':       current_components.get('Mg_solid'),
-            'Mg_liquid':      current_components.get('Mg_liquid'),
-            'T_mantle_bottom':current_components.get('T_mantle_bottom'),
-            'T_interface':    current_components.get('T_interface'),
-            'tt_n_ev':        current_components.get('tt_n_ev'),
-            'tt_n_ph':        current_components.get('tt_n_ph'),
-            'tt_n_miss':      current_components.get('tt_n_miss'),
+        record = {
+            'step':        step + 1,
+            'params':      current,
+            'misfit':      current_misfit,
+            'accepted':    bool(accepted),
+            'accept_rate': accept_rate,
             'proposal_S_lit':      _NG_S_LOG['last'],
             'proposal_S_in_range': bool(_NG_S_LOG['last_in_range']),
-            'accepted':       bool(accepted),
-            'accept_rate':    accept_rate,
-        })
+        }
+        record.update({k: current_components.get(k) for k in CHAIN_KEYS})
+        chain.append(record)
 
-        with open(chain_file, 'w') as f:
+        tmp_file = chain_file + '.tmp'
+        with open(tmp_file, 'w') as f:
             json.dump(chain, f, indent=2)
+        os.replace(tmp_file, chain_file)
 
     print(f"\nChain {chain_id} done  "
           f"accept_rate={accept_count/n_steps*100:.1f}%  "

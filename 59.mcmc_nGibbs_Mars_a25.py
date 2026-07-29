@@ -800,7 +800,37 @@ def run_ngibbs(params, P_bml_top=None):
         'P_profile': P,
         'T_profile': T,
     }
+class _PDFail(Exception):
+    """相圖/EoS 在求根過程中失敗 → 外層 reject 該樣本"""
+    pass
 
+def _interface_state(h_s, T_core, P_top, P_bottom, Mg_bulk, bml_thickness):
+    """給定試探 h_solid,回傳 (h_pred, pd, T_interface, P_int, rho_L_int) 或 None。
+    內層 3 次小迭代處理 dTdP 對 XL 的弱依賴(收斂極快)。"""
+    P_int = P_top + (P_bottom - P_top) * h_s / bml_thickness
+    XL_g  = Mg_bulk
+    pd    = None
+    T_int = T_core
+    for _ in range(3):
+        dTdP = liquid_adiabat_dTdP(P_bottom, T_core, XL_g)
+        if not np.isfinite(dTdP):
+            return None
+        T_int = T_core - dTdP * (P_bottom - P_int)
+        pd = bml_phase_diagram(T_int, P_int, Mg_bulk)
+        if pd is None:
+            return None
+        if pd['melting'] and np.isfinite(pd.get('XL', np.nan)):
+            XL_g = pd['XL']
+    if not pd['melting']:                      # 全固:界面收在 CMB
+        return bml_thickness, pd, T_int, P_int, np.nan
+    if pd['f_solid'] < 1e-3:                   # 全熔
+        return 0.0, pd, T_int, P_int, np.nan
+    rho_L_int, _, _ = liquid_bml_properties(P_int, T_int, pd['XL'])
+    if not np.isfinite(rho_L_int):
+        return None
+    phi_S = mole_to_volume_fraction(pd['f_solid'], pd['XS'], pd['XL'],
+                                    _RHO_S_CONST, rho_L_int)
+    return bml_thickness * phi_S, pd, T_int, P_int, rho_L_int
 
 def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
                    rho_solid_bml_si=_RHO_S_RA, n_points=20):
@@ -810,65 +840,55 @@ def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
     P_top         = max(float(pressure_mars(bml_top_depth)), 5.0)
     P_bottom      = float(pressure_mars(true_cmb_depth))
 
-    # ── self-consistent iteration (pure analytical, < 0.01s) ─────────────────
-    P_int         = P_bottom     # initial guess: interface at CMB -> zero liquid
-    T_interface   = T_core
-    h_solid_km    = bml_thickness
-    h_liquid_km   = 0.0
-    Mg_solid      = Mg_bulk
-    Mg_liquid     = np.nan
     Ra            = np.nan
     thermal_state = 'undefined'
-    pd            = {'melting': False, 'T_solidus': np.nan}
 
-    for _ in range(10):
-        T_old, P_old = T_interface, P_int
-        pd = bml_phase_diagram(T_interface, P_int, Mg_bulk)
-        if pd is None:
-            return None
-        if not pd['melting']:                       # 全固
-            h_solid_km, h_liquid_km = bml_thickness, 0.0
-            Mg_solid, Mg_liquid     = Mg_bulk, np.nan
-            T_interface, P_int      = T_core, P_bottom
-            break
-        elif pd['f_solid'] < 1e-3:                  # 全熔
-            h_solid_km, h_liquid_km = 0.0, bml_thickness
-            Mg_solid, Mg_liquid     = np.nan, Mg_bulk
-            Ra, thermal_state       = np.nan, 'molten'
-            dTdP = liquid_adiabat_dTdP(P_bottom, T_core, Mg_bulk)
-            if not np.isfinite(dTdP):
-                return None
-            T_interface = T_core - dTdP * (P_bottom - P_top)
-            P_int       = P_top
-            break
-        else:                                       # 分層
-            rho_L_int, _, _ = liquid_bml_properties(P_int, T_interface, pd['XL'])
-            if not np.isfinite(rho_L_int):
-                return None
-            phi_S = mole_to_volume_fraction(pd['f_solid'], pd['XS'], pd['XL'],
-                                            _RHO_S_CONST, rho_L_int)
-            h_solid_km  = max(bml_thickness * phi_S,         0.0)
-            h_liquid_km = max(bml_thickness * (1.0 - phi_S), 0.0)
-            Mg_solid, Mg_liquid = pd['XS'], pd['XL']
+    # ── 自洽界面:brentq 有界求根(取代 fixed-point 迭代) ──────────────────
+    # 未知數 h_solid,殘差 g(h) = h − h_pred(h)。
+    # g(0) = −h_pred(0) ≤ 0、g(D) = D − h_pred(D) ≥ 0 恆成立 → bracket 保證存在。
+    def _resid(h_s):
+        st = _interface_state(h_s, T_core, P_top, P_bottom, Mg_bulk, bml_thickness)
+        if st is None:
+            raise _PDFail()
+        return h_s - st[0]
 
-        if h_solid_km < 1.0:
-            h_solid_km, h_liquid_km = 0.0, bml_thickness
-            Mg_solid, Mg_liquid     = np.nan, Mg_bulk
-            Ra, thermal_state       = np.nan, 'molten'
-            dTdP = liquid_adiabat_dTdP(P_bottom, T_core, Mg_bulk)
-            if not np.isfinite(dTdP):
-                return None
-            T_interface = T_core - dTdP * (P_bottom - P_top)
-            P_int = P_top
-            break
+    try:
+        g0 = _resid(0.0)
+        gD = _resid(bml_thickness)
+        if gD <= 0.0:                # h_pred(D) >= D → 全固
+            h_solid_km = bml_thickness
+        elif g0 >= 0.0:              # h_pred(0) <= 0 → 全熔
+            h_solid_km = 0.0
+        else:
+            h_solid_km = brentq(_resid, 0.0, bml_thickness, xtol=0.5)  # 0.5 km 精度
+    except _PDFail:
+        return None
 
-        P_int       = P_top + (P_bottom - P_top) * h_solid_km / bml_thickness
-        dTdP = liquid_adiabat_dTdP(P_bottom, T_core, pd['XL'])
+    st = _interface_state(h_solid_km, T_core, P_top, P_bottom, Mg_bulk, bml_thickness)
+    if st is None:
+        return None
+    _, pd, T_interface, P_int, rho_L_int = st
+
+    # ── 依解出的 h_solid 分三態,明確設定所有狀態變數 ─────────────────────────
+    if h_solid_km < 1.0:
+        # 全熔(含 brentq 解出 <1 km 殘餘固體的 snap,與舊版行為一致)
+        h_solid_km, h_liquid_km = 0.0, bml_thickness
+        Mg_solid, Mg_liquid     = np.nan, Mg_bulk
+        Ra, thermal_state       = np.nan, 'molten'
+        dTdP = liquid_adiabat_dTdP(P_bottom, T_core, Mg_bulk)
         if not np.isfinite(dTdP):
             return None
-        T_interface = T_core - dTdP * (P_bottom - P_int)
-        if abs(T_interface - T_old) < 5.0 and abs(P_int - P_old) < 0.02:
-            break
+        T_interface = T_core - dTdP * (P_bottom - P_top)
+        P_int       = P_top
+    elif (not pd['melting']) or h_solid_km >= bml_thickness - 1e-9:
+        # 全固
+        h_solid_km, h_liquid_km = bml_thickness, 0.0
+        Mg_solid, Mg_liquid     = Mg_bulk, np.nan
+        T_interface, P_int      = T_core, P_bottom
+    else:
+        # 分層:成分從相圖取回
+        h_liquid_km         = bml_thickness - h_solid_km
+        Mg_solid, Mg_liquid = pd['XS'], pd['XL']
 
     # Ra 事後診斷 (descriptor, not driver)
     if h_solid_km >= 1.0:
@@ -917,7 +937,7 @@ def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
                       'T_K': T_sol, 'Vp': np.asarray(Vp_raw), 'Vs': np.asarray(Vs_raw),
                       'rho': rho_s, 'phi': np.zeros(n_sol)}
 
-    # ── Step 3b: liquid BML (Thomas EoS, Vs=0, isothermal = T_core) ──────────
+    # ── Step 3b: liquid BML (Thomas EoS, Vs=0) ───────────────────────────────
     liquid_data = None
     if h_liquid_km >= 1.0 and not np.isnan(Mg_liquid):
         n_liq   = max(int(n_points * h_liquid_km / bml_thickness), 3)
@@ -930,7 +950,9 @@ def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
 
         off = solid_data['depth_km'][-1] if solid_data is not None else np.interp(P_liq[0], _pres_gpa, _pres_depth)
         depth_liq = np.interp(P_liq, _pres_gpa, _pres_depth)
-        depth_liq = np.maximum(depth_liq, off)   # keep monotonic across the interface
+        clash = depth_liq <= off
+        if clash.any():
+            depth_liq[clash] = off + 0.002 * (np.arange(clash.sum()) + 1)
 
         liquid_data = {'depth_km': depth_liq, 'P_GPa': P_liq,
                        'T_K': T_liq_arr,
@@ -969,17 +991,29 @@ def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth,
         'thermal_state':           thermal_state,
         'h_solid_km':              h_solid_km,
         'h_liquid_km':             h_liquid_km,
-        'Mg_solid':                Mg_solid,
+        'Mg_solid':                Mg_solid if not np.isnan(Mg_solid) else -1.0,
         'Mg_liquid':               Mg_liquid if not np.isnan(Mg_liquid) else -1.0,
         'melting':                 pd['melting'],
         'T_interface':             T_interface,
         'rho_solid_bml':           float(np.mean(solid_data['rho']))  if solid_data  is not None else -1.0,
         'rho_liquid_bml':          float(np.mean(liquid_data['rho'])) if liquid_data is not None else -1.0,
         'P_interface':             float(P_int),
+        'interface_solver':        'brentq',
     }
 
 
 # ── TauP ──────────────────────────────────────────────────────────────────────
+def _validate_nd_depths(*depth_arrays):
+    """驗證即將寫進 .nd 的深度(以 %.3f 捨入後):禁倒退、禁三連同值。
+    成對重複(不連續面)合法。"""
+    d  = np.round(np.concatenate([np.asarray(a, float) for a in depth_arrays]), 3)
+    dd = np.diff(d)
+    if np.any(dd < 0):
+        raise ValueError("nd profile: depth not monotonic (after rounding)")
+    same = (dd == 0)
+    if same.size > 1 and np.any(same[:-1] & same[1:]):
+        raise ValueError("nd profile: >=3 consecutive identical depths (after rounding)")
+
 def build_taup(fort56_data, model_name, samuel_cache, bml_data=None):
     os.makedirs(TAUP_WORK_DIR, exist_ok=True)
     model_name = model_name.replace(".npz", "")
@@ -1031,6 +1065,7 @@ def build_taup(fort56_data, model_name, samuel_cache, bml_data=None):
         if np.any(man_Vp <= 0) or np.any(vp_b <= 0) or np.any(man_rho <= 0):
             raise ValueError("profile has non-positive Vp/rho")
 
+        _validate_nd_depths(man_depth, d_b)
         # first index where Vs vanishes (melt correction can zero Vs inside the
         # nominally solid layer, so locate the fluid boundary from the data itself)
         zero = np.where(vs_b <= 1e-6)[0]
@@ -1109,12 +1144,12 @@ def compute_mass_and_moi(fort56_data, samuel_cache, bml_data):
     return M, I / (M * R**2)
 
 # ── solidus penalty ───────────────────────────────────────────────────────────
-def compute_solidus_penalty(fort56_data, params):
+def compute_solidus_penalty(fort56_data, params, true_cmb_depth):
     P_prof = fort56_data.get('P_profile')
     T_prof = fort56_data.get('T_profile')
     if P_prof is None or T_prof is None:
         return 0.0
-    bml_top_km  = TRUE_CMB_DEPTH - params['BML_thickness']
+    bml_top_km  = true_cmb_depth - params['BML_thickness']
     P_bml_top   = float(pressure_mars(bml_top_km))
     mask        = (P_prof >= params['P_lit']) & (P_prof <= P_bml_top)
     P_m, T_m   = P_prof[mask], T_prof[mask]
@@ -1131,6 +1166,7 @@ def compute_solidus_penalty(fort56_data, params):
 
 # ── misfit ────────────────────────────────────────────────────────────────────
 def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
+                   true_cmb_depth=None,
                    mass_sigma=0.0, moi_sigma=0.0, grav_sigma=0.0):
     phases_std   = ['P', 'S', 'pP', 'sP', 'PP', 'PPP', 'SS', 'SSS', 'sS', 'ScS', 'SKS']
     phases_pdiff = phases_std + ['Pdiff']
@@ -1154,20 +1190,23 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
         for a in arrivals:
             if a.name not in times:
                 times[a.name] = a.time
-
+        def _tdiff(times, a, b):
+            ta, tb = times.get(a), times.get(b)
+            return None if (ta is None or tb is None) else ta - tb
+        
         pred = {
-            'S-P':           times.get('S',   None) and times.get('P',    None) and times['S']   - times['P'],
-            'pP-P':          times.get('pP',  None) and times.get('P',    None) and times['pP']  - times['P'],
-            'sP-P':          times.get('sP',  None) and times.get('P',    None) and times['sP']  - times['P'],
-            'PP-P':          times.get('PP',  None) and times.get('P',    None) and times['PP']  - times['P'],
-            'PPP-P':         times.get('PPP', None) and times.get('P',    None) and times['PPP'] - times['P'],
-            'sS-S':          times.get('sS',  None) and times.get('S',    None) and times['sS']  - times['S'],
-            'SS-S':          times.get('SS',  None) and times.get('S',    None) and times['SS']  - times['S'],
-            'SSS-S':         times.get('SSS', None) and times.get('S',    None) and times['SSS'] - times['S'],
-            'ScS-S':         times.get('ScS', None) and times.get('S',    None) and times['ScS'] - times['S'],
-            'SS-PP':         times.get('SS',  None) and times.get('PP',   None) and times['SS']  - times['PP'],
-            'SKS-PP':        times.get('SKS', None) and times.get('PP',   None) and times['SKS'] - times['PP'],
-            'PP-PbdiffPcP':  times.get('PP',  None) and times.get('Pdiff',None) and times['PP']  - times['Pdiff'],
+            'S-P':              _tdiff(times, 'S',   'P'),
+            'pP-P':             _tdiff(times, 'pP',  'P'),
+            'sP-P':             _tdiff(times, 'sP',   'P'),
+            'PP-P':             _tdiff(times, 'PP',   'P'),        
+            'PPP-P':            _tdiff(times, 'PPP',  'P'),     
+            'sS-S':             _tdiff(times, 'sS',   'S'),    
+            'SS-S':             _tdiff(times, 'SS',   'S'),  
+            'SSS-S':            _tdiff(times, 'SSS',  'S'),      
+            'ScS-S':            _tdiff(times, 'ScS',  'S'),   
+            'SS-PP':            _tdiff(times, 'SS',   'PP'),       
+            'SKS-PP':           _tdiff(times, 'SKS',  'PP'),  
+            'PP-PbdiffPcP':     _tdiff(times, 'PP',   'Pdiff'), 
         }
 
         ev_sum, ev_n, ev_miss = 0.0, 0, 0
@@ -1202,7 +1241,8 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
     if tt_n_ev < n_ev_expected:
         tt_misfit += 10.0 * (n_ev_expected - tt_n_ev)
 
-    solidus_penalty = compute_solidus_penalty(fort56_data, params) if params else 0.0
+    solidus_penalty = (compute_solidus_penalty(fort56_data, params, true_cmb_depth)
+                       if params else 0.0)
     total_misfit = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma
     if not np.isfinite(total_misfit):
         total_misfit = 999.0
@@ -1279,6 +1319,7 @@ def forward(params, run_dir, model_name, samuel_cache):
 
     misfit, n_data, components = compute_misfit(
         taup_model, SAMUEL_DATA, fort56_data, bml_data=bml_data, params=params,
+        true_cmb_depth=true_cmb_depth,
         mass_sigma=mass_sigma, moi_sigma=moi_sigma, grav_sigma=grav_sigma)
 
     
@@ -1307,18 +1348,20 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     rng     = np.random.default_rng(42 + chain_id)
     current = (start_params or START_PARAMS).copy()
 
-    chain_file = os.path.join(chain_dir, "chain.json")
-    chain      = []
+    chain_file = os.path.join(chain_dir, "chain.jsonl")
+    chain = []
     if os.path.exists(chain_file):
         with open(chain_file) as f:
-            chain = json.load(f)
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    chain.append(json.loads(line))
+                except json.JSONDecodeError:
+                    break
         if chain:
             current = chain[-1]['params']
-            # migrate old parameter names → new names
-            if 'T_bml' in current and 'T_core' not in current:
-                current['T_core'] = current.pop('T_bml')
-            if 'Mg#_bml' in current and 'Mg#_bulk_bml' not in current:
-                current['Mg#_bulk_bml'] = current.pop('Mg#_bml')
             print(f"Chain {chain_id}: resuming from step {len(chain)}")
 
     step_start = len(chain)
@@ -1424,10 +1467,8 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         record.update({k: current_components.get(k) for k in CHAIN_KEYS})
         chain.append(record)
 
-        tmp_file = chain_file + '.tmp'
-        with open(tmp_file, 'w') as f:
-            json.dump(chain, f, indent=2)
-        os.replace(tmp_file, chain_file)
+        with open(chain_file, 'a') as f:
+            f.write(json.dumps(record) + '\n')
 
     print(f"\nChain {chain_id} done  "
           f"accept_rate={accept_count/n_steps*100:.1f}%  "

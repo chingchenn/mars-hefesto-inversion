@@ -39,6 +39,10 @@ NG_S_MIN     = 1.75
 NG_S_MAX     = 2.90
 NG_N_SHALLOW = 100
 NG_N_DEEP    = 101
+RES_CAP      = 5.0
+MISS_PENALTY = 8.0
+SOLIDUS_SIGMA = 12.0    # K, 熔體分率達 ~1% 的溫度尺度
+SOLIDUS_CAP   = 25.0        # 對應 60 K 超額
 
 # per-proposal S_lit log (includes proposals rejected for being out of range)
 _NG_S_LOG = {'last': np.nan, 'last_in_range': True, 'all': [], 'n_below': 0, 'n_above': 0}
@@ -77,7 +81,7 @@ PRIOR = {
 'Mg#': (0.50, 0.86),
 'T_core': (1800.0, 3200.0),
 'Mg#_bulk_bml': (0.30, 0.80),
-'BML_thickness': (50.0, 400.0),
+'BML_thickness': (0.0, 400.0),
 }
 
 STEP = {
@@ -94,7 +98,7 @@ CHAIN_KEYS = (
     'moi_pred', 'M_pred','upper_contrast', 'lower_contrast', 'Ra', 'thermal_state',
     'h_solid_km', 'h_liquid_km', 'melting', 'Mg_solid', 'Mg_liquid',
     'rho_solid_bml', 'rho_liquid_bml', 'P_interface',
-    'T_mantle_bottom', 'T_interface', 'tt_n_ev', 'tt_n_ph', 'tt_n_miss',
+    'T_mantle_bottom', 'T_interface', 'S_lit', 'tt_n_ev', 'tt_n_ph', 'tt_n_miss',
 )
 BML_KEYS = ('Ra', 'thermal_state', 'h_solid_km', 'h_liquid_km', 'melting',
             'Mg_solid', 'Mg_liquid', 'T_interface',
@@ -1120,7 +1124,7 @@ def compute_solidus_penalty(fort56_data, params):
     # Drilleau 2026. The fixed Mg#=0.75 curve made this penalty blind to Mg#.
     T_sol_arr   = np.array([solidus_duncan_Mg(p, params['Mg#']) for p in P_m])
     excess  = np.clip(T_m - T_sol_arr, 0.0, None)
-    penalty = float(np.trapezoid(excess, P_m)) / 16.0   # ∫excess dP (K·GPa), 網格無關
+    penalty = min((np.max(excess) / SOLIDUS_SIGMA)**2, SOLIDUS_CAP) if len(excess) else 0.0
     if penalty > 0:
         print(f"  Solidus penalty = {penalty:.4f}")
     return penalty
@@ -1172,17 +1176,16 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
                 continue
             p_val = pred.get(phase)
             if p_val is None or p_val is False:
-                ev_sum += 5.0; ev_n += 1; ev_miss += 1   # lack phases = 5σ fixed residual
+                ev_sum += MISS_PENALTY; ev_n += 1; ev_miss += 1
                 continue
             obs_t, sigma = obs_val
-            if sigma <= 0 or not np.isfinite(obs_t) or not np.isfinite(p_val):
-                ev_sum += 5.0; ev_n += 1; ev_miss += 1
+            if sigma <= 0 or not np.isfinite(obs_t):
                 continue
-            val = abs(obs_t - p_val) / sigma
+            val = min(abs(obs_t - p_val) / sigma, RES_CAP)
             if np.isfinite(val):
                 ev_sum += val; ev_n += 1
             else:
-                ev_sum += 5.0; ev_n += 1; ev_miss += 1
+                ev_sum += MISS_PENALTY; ev_n += 1; ev_miss += 1
 
         if ev_n > 0:
             tt_total  += ev_sum / ev_n
@@ -1235,7 +1238,7 @@ def forward(params, run_dir, model_name, samuel_cache):
                              T_core=params['T_core'],
                              T_mantle_bottom=T_mantle_bottom,
                              true_cmb_depth=true_cmb_depth,
-                             rho_solid_bml_si=_RHO_S_CONST * 1000.0)   # 4.097 g/cc -> kg/m3
+                             rho_solid_bml_si=_RHO_S_CONST * 1000.0)   # 4.17 g/cc -> kg/m3
     if bml_raw is None:
         print("  BML failed → reject"); return None, None, None, None, None
 
@@ -1280,6 +1283,7 @@ def forward(params, run_dir, model_name, samuel_cache):
 
     
     components.update({k: bml_data.get(k) for k in BML_KEYS})
+    components['S_lit'] = float(fort56_data['S'][0])
     components['mass_sigma']      = mass_sigma
     components['moi_sigma']       = moi_sigma
     components['moi_pred']        = moi_pred      
@@ -1291,15 +1295,7 @@ def forward(params, run_dir, model_name, samuel_cache):
 
 # ── MCMC ──────────────────────────────────────────────────────────────────────
 def propose(current, rng):
-    proposed = {}
-    for key in PRIOR:
-        lo, hi = PRIOR[key]
-        while True:
-            val = current[key] + rng.normal(0, STEP[key])
-            if lo <= val <= hi:
-                proposed[key] = val
-                break
-    return proposed
+    return {k: current[k] + rng.normal(0, STEP[k]) for k in PRIOR}
 
 
 def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
@@ -1360,16 +1356,24 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         run_dir      = os.path.join(chain_dir, f"step_{step+1:05d}")
         model_name   = f"mcmc_{prefix}_c{chain_id:02d}_s{step+1:05d}"
 
-        proposed_misfit, n_data, components, fort56_data, bml_data = forward(
-            proposed, run_dir, model_name, samuel_cache)
+        out_of_prior = any(not (PRIOR[k][0] <= proposed[k] <= PRIOR[k][1])
+                           for k in PRIOR)
 
-        if proposed_misfit is None or proposed_misfit >= 990.0:
+        if out_of_prior:
             accepted        = False
             proposed_misfit = 999.0
-
+            fort56_data     = None
+            bml_data        = None
         else:
-            delta = proposed_misfit - current_misfit
-            accepted = delta <= 0 or np.log(rng.uniform()) < -delta / MCMC_TEMPERATURE
+            proposed_misfit, n_data, components, fort56_data, bml_data = forward(
+                proposed, run_dir, model_name, samuel_cache)
+
+            if proposed_misfit is None or proposed_misfit >= 990.0:
+                accepted        = False
+                proposed_misfit = 999.0
+            else:
+                delta = proposed_misfit - current_misfit
+                accepted = delta <= 0 or np.log(rng.uniform()) < -delta / MCMC_TEMPERATURE
 
         if accepted:
             current            = proposed

@@ -2,11 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 MCMC inversion for Mars interior structure using nGibbs (HeFESTo emulator) + BML physics
-a35: Fe-S EoS core in the forward model (core_fes.py). New free parameter w_S.
-     T_core now feeds both the BML and the core adiabat; core rho/Vp respond to
-     (T_core, w_S) via mass, MoI, ScS/SKS travel times, and Kono density contrast.
-     R_ic from the static ICB thermometer is recorded every step; set
-     USE_RIC_LIKELIHOOD=True to include Bi 2025 R_ic=612 km in the likelihood (Run B).
 """
 
 import os
@@ -36,12 +31,12 @@ if torch.cuda.is_available():
 
 from mars_config import *
 
-# ── Fe-S core EoS (a26: core in forward model) ───────────────────────────────
+# ── Fe-S core EoS (a36: core in forward model) ───────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import core_fes as CF     # kuwayama Fe + sakai FeS + Margules, 查表加速
+import core_fes as CF     
 
-USE_RIC_LIKELIHOOD = False   # Run A: False(只有 mass/MoI/TT 約束 T_core, w_S)
-                             # Run B: True (加 Bi 2025 內核半徑進 likelihood)
+
+
 BI_RIC_KM  = 612.0           # Bi 2025 refined inversion
 BI_RIC_SIG = 112.0           # sqrt(50^2 + 100^2): 形式誤差 + OC 速度 5%→100 km 系統項
 RIC_MAX_KM = 750.0           # InSight 上限(SKS 最大穿透深度, Irving 2023)
@@ -52,8 +47,7 @@ NG_S_HEADERS = ['P(GPa)(System_main)', 'S(J/g/K)(System_main)',
                 'Si', 'Mg', 'Fe', 'Ca', 'Al', 'Na', 'Cr', 'O']
 NG_S_MIN     = 1.75
 NG_S_MAX     = 2.90
-NG_N_SHALLOW = 100
-NG_N_DEEP    = 101
+
 
 # ── travel-time misfit scale ──────────────────────────────────────────────────
 # Ordering must be strict:  good fit  <  worst present phase (RES_CAP)
@@ -83,11 +77,24 @@ MOI_OBS          = 0.36379   # Bagheri 2019 / Konopliv 2016, C/MR^2 with
                              # 1 sigma away and in the opposite direction -> discussion
                              # sensitivity, not the baseline.
 MOI_SIGMA        = 0.0005
-MOI_BIAS         = 0.00136   # pipeline systematic: pure-Samuel PanelJ through this
+MOI_BIAS         = 0.0  # pipeline systematic: pure-Samuel PanelJ through this
                              # integrator gives MoI=0.36515 vs obs 0.36379 (budget test)
 MCMC_TEMPERATURE = 1.0
 
-TRUE_CMB_DEPTH = None   # km  true CMB
+SC_N_FIXED  = 40      # 節點數
+SC_Z_FIXED  = 100.0   # km,外借區段底部
+SC_N_MAN   = 250       # 地函節點
+SC_N_BML   = 40        # BML 節點
+SC_N_CORE  = 60        # 核節點
+SC_N_ITER  = 8         # 鬆弛上限
+SC_TOL_P   = 0.01      # GPa,收斂判準 max|P_new - P_old|
+SC_G_GRAV  = 6.674e-11
+
+
+GAP_ON      = False
+GAP_SIGMA   = 150.0    # K
+RIC_MAX_KM  = 750.0
+RIC_MAX_SIG = 50.0     # km
 
 # ── MCMC parameters ──────────────────────────────────────────────────────────
 _MG_FE_TOTAL = 5.16834   # Mg + Fe mol (Yoshida-Motoyama)
@@ -102,6 +109,7 @@ START_PARAMS = {
 'Mg#_bulk_bml': 0.62, # bulk BML composition (Samuel ~Fe-rich)
 'BML_thickness': 168.7,
 'w_S': 0.17,     # core S weight fraction (Fe-S binary, effective light element)
+'R_cmb':1650, #km 
 }
 
 # a34 prior widening (a33 pressed three walls):
@@ -120,7 +128,9 @@ PRIOR = {
 'Mg#_bulk_bml': (0.20, 0.80),
 'BML_thickness': (0.0, 400.0),
 'w_S': (0.05, 0.30),          # 化學計量上限 0.365; 地球化學上限 ~0.17 不設進 prior,
-}                             # 讓 posterior 與 17 wt% 的關係成為結果
+                           # 讓 posterior 與 17 wt% 的關係成為結果
+'R_cmb': (1400, 1900),
+}  
 
 STEP = {
 'T_lit': 50.0,
@@ -130,22 +140,22 @@ STEP = {
 'Mg#_bulk_bml': 0.06,
 'BML_thickness': 25.0,
 'w_S': 0.02,
+'R_cmb':25.0,
 }
 
 CHAIN_KEYS = (
     'misfit_tt', 'misfit_solidus', 'grav_sigma', 'mass_sigma', 'moi_sigma',
     'moi_pred', 'M_pred','upper_contrast', 'lower_contrast', 'Ra', 'thermal_state',
     'h_solid_km', 'h_liquid_km', 'melting', 'Mg_solid', 'Mg_liquid',
-    'rho_solid_bml', 'rho_liquid_bml', 'rho_S_interface', 'P_interface',
+    'rho_solid_bml', 'rho_liquid_bml',  'P_interface',
     'T_mantle_bottom', 'T_interface', 'S_lit', 'tt_n_ev', 'tt_n_ph', 'tt_n_miss',
     'tt_n_capped', 'tt_miss_by_event',
     'R_ic_km', 'ric_sigma', 'rho_core_mean', 'Vp_core_cmb',
     'P_center_core', 'T_center_core',
+    'gap_min', 'P_cmb', 'P_bml_top', 'z_lit_km',
+    'sc_n_iter', 'sc_dP', 'sc_dz_lit', 'bml_n_pass',
 )
-BML_KEYS = ('Ra', 'thermal_state', 'h_solid_km', 'h_liquid_km', 'melting',
-            'Mg_solid', 'Mg_liquid', 'T_interface',
-            'rho_solid_bml', 'rho_liquid_bml', 'rho_S_interface', 'P_interface',
-            'upper_contrast', 'lower_contrast')
+
 
 # ── Samuel 2023 paths ─────────────────────────────────────────────────────────
 SAMUEL_DATA_DIR = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
@@ -280,7 +290,7 @@ def _detect_metal_cmb_from_density(rho, r_km):
     return float(depth[np.argmax(np.abs(np.diff(rho))) + 1])
 
 def _build_gravity_pressure():
-    G = 6.674e-11
+    G = SC_G_GRAV
     data = np.loadtxt(SAMUEL_RHO_PROFILE_PATH)
     rho, r_km = data[:, 0], data[:, 1]
     cmb_depth = _detect_metal_cmb_from_density(rho, r_km)
@@ -311,6 +321,159 @@ _grav_depth, _grav_g, _pres_depth, _pres_gpa, _rho_depth, _rho_all, TRUE_CMB_DEP
 def gravity_mars(depth_km):  return np.interp(depth_km, _grav_depth, _grav_g)
 def pressure_mars(depth_km): return np.interp(depth_km, _pres_depth, _pres_gpa)
 
+# ── mass and MoI ──────────────────────────────────────────────────────────────
+def sc_build_grid(params, z_lit=None):
+    """幾何由 R_cmb 與 BML_thickness 決定,所以深度是已知的自變數。
+    z_lit 給定時在地函網格插入該深度兩側的節點(保住傳導/絕熱轉折)。"""
+    z_cmb     = MARS_RADIUS - params['R_cmb']
+    z_bml_top = z_cmb - params['BML_thickness']
+    if z_bml_top <= SC_Z_FIXED:
+        return None, None, None
+
+    z_fx  = np.linspace(0.0, SC_Z_FIXED, SC_N_FIXED)
+    z_sh_bot = min(max(SC_Z_FIXED + 400.0,
+                       (z_lit + 100.0) if z_lit is not None else 0.0),
+                   z_bml_top)
+    n_sh = int(SC_N_MAN*0.6)
+    z_sh = np.linspace(SC_Z_FIXED, z_sh_bot, n_sh)
+    if z_sh_bot < z_bml_top:
+        z_dp  = np.linspace(z_sh_bot, z_bml_top, SC_N_MAN - n_sh + 1)[1:]
+        z_man = np.concatenate([z_sh, z_dp])
+    else:
+        z_man = z_sh
+    if z_lit is not None and SC_Z_FIXED < z_lit < z_bml_top:
+        z_man = np.unique(np.concatenate([z_man, [z_lit - 0.02, z_lit]]))
+    z_bml = np.linspace(z_bml_top, z_cmb,     SC_N_BML)
+    z_cor = np.linspace(z_cmb,     MARS_RADIUS, SC_N_CORE)
+
+    z   = np.concatenate([z_fx, z_man, z_bml, z_cor])
+    lay = np.concatenate([np.zeros(len(z_fx), int), np.ones(len(z_man), int),
+                          2*np.ones(len(z_bml), int), 3*np.ones(len(z_cor), int)])
+    return z, lay, dict(z_bml_top=z_bml_top, z_cmb=z_cmb)
+
+
+def sc_gravity(z_km, rho_si):
+    r = (MARS_RADIUS - z_km) * 1e3                 # m,由大到小
+    o = np.argsort(r)                              # 由中心往外
+    ra, rhoa = r[o], rho_si[o]
+    M = np.zeros(len(ra))
+    rhm = 0.5*(rhoa[1:] + rhoa[:-1])
+    M[1:] = np.cumsum(4*np.pi/3*rhm*(ra[1:]**3 - ra[:-1]**3))
+    g = np.zeros(len(ra))
+    ok = ra > 1.0
+    g[ok] = SC_G_GRAV*M[ok]/ra[ok]**2
+    inv = np.empty(len(ra), int); inv[o] = np.arange(len(ra))
+    return g[inv], M[inv]
+
+def sc_integrate_P(z_km, rho_si, g):
+    """
+        dP/dz = rho(z) g(z) ,  P(0) = 0
+        P_i = P_{i-1} + 0.5*[(rho g)_i + (rho g)_{i-1}] * (z_i - z_{i-1})
+    """
+    w  = np.asarray(rho_si, float)*np.asarray(g, float)   # Pa/m
+    dz = np.diff(z_km)*1e3                                # m
+    P  = np.zeros(len(z_km))
+    P[1:] = np.cumsum(0.5*(w[1:] + w[:-1])*dz)/1e9
+    return P
+
+
+def sc_fixed_layer(z_km, samuel_cache):
+    rho = np.interp(z_km, samuel_cache['crust_z'], samuel_cache['crust_rho'])
+    vp  = np.interp(z_km, samuel_cache['crust_z'], samuel_cache['crust_vp'])
+    vs  = np.interp(z_km, samuel_cache['crust_z'], samuel_cache['crust_vs'])
+    T   = T_SURF + np.zeros_like(z_km)      # T 由 sc_update_T 覆寫
+    return rho, vp, vs, T
+
+
+def sc_mantle(params, P_man):
+    """
+    P < P_lit linear 
+    P >= P_lit S = S_lit 
+    """
+    p = composition_from_params(params)
+    O = compute_oxygen(p)
+    T_lit, P_lit = p['T_lit'], p['P_lit']
+    cv = _comp_values(p, O)
+ 
+    out1  = _ng_forward([P_lit], [T_lit], cv, NG_T_HEADERS, ['component_moles'])
+    S_lit = float(_ng_props(out1['component_moles'], [P_lit], [T_lit], ['S'])['S'][0])
+ 
+    in_range = np.isfinite(S_lit) and NG_S_MIN <= S_lit <= NG_S_MAX
+    _NG_S_LOG['last'] = S_lit
+    _NG_S_LOG['last_in_range'] = in_range
+    _NG_S_LOG['all'].append(S_lit)
+    if np.isfinite(S_lit) and S_lit < NG_S_MIN: _NG_S_LOG['n_below'] += 1
+    if np.isfinite(S_lit) and S_lit > NG_S_MAX: _NG_S_LOG['n_above'] += 1
+    if not in_range:
+        print(f"  S_lit={S_lit:.4f} outside nGibbs range [{NG_S_MIN}, {NG_S_MAX}]")
+        return None
+ 
+    P = np.asarray(P_man, float)
+    if np.any(P <= 0) or not np.all(np.isfinite(P)):
+        print(f"  mantle: non-physical P in field (min={np.nanmin(P):.3f} GPa) -> reject")
+        return None
+    isen = P >= P_lit
+    iso  = ~isen
+    n = len(P)
+    T = np.zeros(n); rho = np.zeros(n); Vp = np.zeros(n); Vs = np.zeros(n)
+ 
+    if isen.any():
+        o2 = _ng_forward(P[isen], np.full(int(isen.sum()), S_lit), cv,
+                         NG_S_HEADERS, ['component_moles', 'temperature'])
+        T_is = np.asarray(o2['temperature'].detach().cpu(), dtype=np.float64)
+        T[isen] = T_is
+        pr = _ng_props(o2['component_moles'], P[isen], T_is, ['rho', 'Vp', 'Vs'])
+        rho[isen], Vp[isen], Vs[isen] = pr['rho'], pr['Vp'], pr['Vs']
+ 
+    if iso.any():
+        T_is = T_SURF + (T_lit - T_SURF)*(P[iso]/P_lit)
+        T[iso] = T_is
+        o3 = _ng_forward(P[iso], T_is, cv, NG_T_HEADERS, ['component_moles'])
+        pr = _ng_props(o3['component_moles'], P[iso], T_is, ['rho', 'Vp', 'Vs'])
+        rho[iso], Vp[iso], Vs[iso] = pr['rho'], pr['Vp'], pr['Vs']
+ 
+    if not (np.all(np.isfinite(rho)) and np.all(rho > 0)
+            and np.all(np.isfinite(Vp)) and np.all(np.isfinite(Vs))):
+        print("  mantle nGibbs NaN/Inf -> reject")
+        return None
+    return dict(rho=rho, Vp=Vp, Vs=Vs, T=T, S_lit=S_lit)
+
+ 
+def sc_core(params, z_cor, P_cmb, g_cor):
+    """ 
+    dP = rho g dz ;  dT = (gamma T / K_S) dP
+    不再呼叫 CF.build_core_profile —— 那是獨立的自重積分,
+    與全行星那一條會重複且不一致。
+    """
+    n   = len(z_cor)
+    w_S = params['w_S']
+    P = np.full(n, P_cmb); T = np.full(n, params['T_core'])
+    rho = np.full(n, 6800.0)
+    for _ in range(12):
+        pr = CF.core_properties(P, T, w_S)
+        rho_new = pr['rho']*1e3
+        if not np.all(np.isfinite(rho_new)):
+            return None
+        dTdP = np.where(np.isfinite(pr['dTdP']), pr['dTdP'], 0.0)
+        dz = np.diff(z_cor)*1e3
+        P_new = np.empty(n); T_new = np.empty(n)
+        P_new[0], T_new[0] = P_cmb, params['T_core']
+        w = rho_new*g_cor
+        for i in range(1, n):
+            P_new[i] = P_new[i-1] + 0.5*(w[i] + w[i-1])*dz[i-1]/1e9
+            T_new[i] = T_new[i-1] + dTdP[i-1]*(P_new[i] - P_new[i-1])
+        dmax = float(np.max(np.abs(P_new - P)))
+        P, T, rho = P_new, T_new, rho_new
+        if dmax < 0.005:
+            break
+    pr = CF.core_properties(P, T, w_S)
+    if not np.all(np.isfinite(pr['Vp'])):
+        return None
+    return dict(r=(MARS_RADIUS - z_cor)*1e3,        # m,由 CMB 到中心
+               P=P, T=T, rho=pr['rho']*1e3, Vp=pr['Vp'],
+               Vs=np.zeros(n), dTdP=pr['dTdP'])
+
+
 # ── Samuel 2023 median model ──────────────────────────────────────────────────
 def _load_samuel_reference():
     vp_data = np.loadtxt(os.path.join(SAMUEL_FIG1K_DIR, 'vp_profile.dat'))
@@ -321,36 +484,18 @@ def _load_samuel_reference():
     o = np.argsort(depth)
     depth, vp, vs = depth[o], vp[o], vs[o]
 
-    crust_z = np.linspace(0.0, 100.0, 200)
-    core_z  = np.linspace(TRUE_CMB_DEPTH, MARS_RADIUS, 200)
+    crust_z = np.linspace(0.0, SC_Z_FIXED, 200)
 
     solid = vs >= 0.1
     crust_vp = np.interp(crust_z, depth[solid], vp[solid])
     crust_vs = np.interp(crust_z, depth[solid], vs[solid])
-
-    core_sel = depth >= TRUE_CMB_DEPTH
-    core_vp  = np.interp(core_z, depth[core_sel], vp[core_sel])
-
-
-    liquid = vs < 0.1
-    bml_top_depth = float(depth[liquid].min()) if liquid.any() else np.nan
-
     crust_rho = np.interp(crust_z, _rho_depth, _rho_all)
-    core_rho  = np.interp(core_z,  _rho_depth, _rho_all)
 
-    print(f"Samuel Fig1 reference: metal CMB={TRUE_CMB_DEPTH:.1f} km  "
-          f"apparent CMB / BML top (Vs->0)={bml_top_depth:.1f} km")
     return {
         'crust_z':        crust_z,
         'crust_vp':       crust_vp,
         'crust_vs':       crust_vs,
         'crust_rho':      crust_rho,
-        'core_z':         core_z,
-        'core_vp':        core_vp,
-        'core_vs':        np.zeros(len(core_z)),
-        'core_rho':       core_rho,
-        'true_cmb_depth': TRUE_CMB_DEPTH,
-        'bml_top_depth':  bml_top_depth,
     }
 
 _samuel_cache = _load_samuel_reference()
@@ -625,23 +770,15 @@ K_SOLID  = 4.0       # W/m/K
 # >>> This is a modelling CHOICE you must defend at the exam. Test the sensitivity.
 _RA_C  = 1.0e5
 
-def compute_bml_thermal_state(T_mantle_bottom, T_interface, h_solid_km, bml_top_km,
-                              rho_solid):
-    """Ra of the solid sublayer. Boundary temps are FIXED by the neighbours
-    (top: mantle bottom, bottom: solid/liquid interface). Ra selects the
-    internal profile SHAPE only — it never modifies boundary temperatures.
-    rho_solid in kg/m3, required (no default: a silent 3800 proxy caused the
-    a31 Ra error of three orders of magnitude)."""
-    z_mid = bml_top_km + h_solid_km / 2.0
-    P_mid = float(pressure_mars(z_mid)) * 1e9
-    T_mid = 0.5 * (T_mantle_bottom + T_interface)
+def compute_bml_thermal_state(T_mantle_bottom, T_interface, h_solid_km,
+                                    rho_solid, P_mid_Pa, g_mid):
+    T_mid = 0.5*(T_mantle_bottom + T_interface)
     dT    = max(T_interface - T_mantle_bottom, 0.0)
-    eta   = _ETA0 * np.exp((_ESTAR + P_mid*_VSTAR) / (_R_GAS * T_mid)
-                           - (_ESTAR + _P_REF*_VSTAR) / (_R_GAS * _T0_ETA))
-    h     = h_solid_km * 1000.0
-    g     = gravity_mars(z_mid)
-    kappa = K_SOLID / (rho_solid * _CP_S)
-    Ra    = _ALPHA_S * rho_solid * g * dT * h**3 / (kappa * eta)
+    eta   = _ETA0*np.exp((_ESTAR + P_mid_Pa*_VSTAR)/(_R_GAS*T_mid)
+                        - (_ESTAR + _P_REF*_VSTAR)/(_R_GAS*_T0_ETA))
+    h     = h_solid_km*1000.0
+    kappa = K_SOLID/(rho_solid*_CP_S)
+    Ra    = _ALPHA_S*rho_solid*g_mid*dT*h**3/(kappa*eta)
     return Ra, ('conductive' if Ra < _RA_C else 'convective')
 
 # ── Liquid BML EoS (Thomas 2012 Fa + Thomas 2013 Fo, volume mixing) ───────────
@@ -794,319 +931,307 @@ def rho_solid_ngibbs(XS, P_GPa, T_K):
                       NG_T_HEADERS, ['component_moles'])
     return float(_ng_props(out['component_moles'], [P_GPa], [T_K], ['rho'])['rho'][0])
 
-
-def run_ngibbs(params, P_bml_top=None):
-    p = composition_from_params(params)
-    O = compute_oxygen(p)
-    T_lit, P_lit = p['T_lit'], p['P_lit']
-    comp_values = _comp_values(p, O)
-
-    if P_bml_top is None:
-        bml_top_km = TRUE_CMB_DEPTH - params.get('BML_thickness', 168.7)
-        P_bml_top  = float(pressure_mars(bml_top_km))
-
-    # step 1: S_lit at (P_lit, T_lit)
-    out1  = _ng_forward([P_lit], [T_lit], comp_values,
-                        NG_T_HEADERS, ['component_moles'])
-    S_lit = float(_ng_props(out1['component_moles'],
-                            [P_lit], [T_lit], ['S'])['S'][0])
-
-    in_range = np.isfinite(S_lit) and NG_S_MIN <= S_lit <= NG_S_MAX
-    _NG_S_LOG['last']          = S_lit
-    _NG_S_LOG['last_in_range'] = in_range
-    _NG_S_LOG['all'].append(S_lit)
-    if np.isfinite(S_lit) and S_lit < NG_S_MIN: _NG_S_LOG['n_below'] += 1
-    if np.isfinite(S_lit) and S_lit > NG_S_MAX: _NG_S_LOG['n_above'] += 1
-
-    if not in_range:
-        print(f"  S_lit={S_lit:.4f} outside nGibbs training range "
-              f"[{NG_S_MIN}, {NG_S_MAX}]")
-        return None
-    print(f"  S_lit={S_lit:.6f}  T={T_lit:.1f}K  P={P_lit:.2f}GPa")
-
-    # pressure grid: surface -> P_bml_top.
-    # P_lit and P_lit-eps are inserted explicitly: the fixed 3.0 GPa breakpoint means
-    # the shallow grid is ~0.03 GPa and the deep grid ~0.18 GPa, so without these two
-    # nodes the conductive/adiabatic kink (and therefore the LVZ sharpness, and
-    # therefore the P-wave shadow zone and tt_n_miss) would be smeared by an amount
-    # that depends systematically on whether P_lit falls below or above 3.0 GPa.
-    P = np.unique(np.concatenate([np.linspace(0.01, 3.0, NG_N_SHALLOW),
-                                  np.linspace(3.0, P_bml_top, NG_N_DEEP)[1:],
-                                  [P_lit - 1e-4, P_lit]]))
-    n    = len(P)
-    isen = P >= P_lit
-    iso  = ~isen
-
-    T   = np.zeros(n)
-    rho = np.zeros(n)
-    Vp  = np.zeros(n)
-    Vs  = np.zeros(n)
-
-    # step 2: isentropic asthenosphere (T(P) directly, no bisection)
-    out2   = _ng_forward(P[isen], np.full(isen.sum(), S_lit), comp_values,
-                         NG_S_HEADERS, ['component_moles', 'temperature'])
-    T_isen = np.asarray(out2['temperature'].detach().cpu(), dtype=np.float64)
-    T[isen] = T_isen
-    pr = _ng_props(out2['component_moles'], P[isen], T_isen, ['rho', 'Vp', 'Vs'])
-    rho[isen] = pr['rho']
-    Vp[isen]  = pr['Vp']
-    Vs[isen]  = pr['Vs']
-
-    # step 3: conductive lithosphere, T linear in P
-    T_iso  = T_SURF + (T_lit - T_SURF) * (P[iso] / P_lit)
-    T[iso] = T_iso
-    out3 = _ng_forward(P[iso], T_iso, comp_values,
-                       NG_T_HEADERS, ['component_moles'])
-    pr = _ng_props(out3['component_moles'], P[iso], T_iso, ['rho', 'Vp', 'Vs'])
-    rho[iso] = pr['rho']
-    Vp[iso]  = pr['Vp']
-    Vs[iso]  = pr['Vs']
-
-    if not np.all(np.isfinite(rho)) or np.any(rho <= 0):
-        print("  nGibbs returned invalid density")
-        return None
-
-    print(f"  Adiabat: T={T_isen[0]:.1f}K@{P[isen][0]:.2f}GPa -> "
-          f"T={T[-1]:.1f}K@{P[-1]:.2f}GPa")
-
-    if not (np.all(np.isfinite(Vp)) and np.all(np.isfinite(Vs)) and np.all(np.isfinite(rho))):
-        print(f"  nGibbs 產生 NaN/Inf → reject  (T_lit={params.get('T_lit', -1):.0f} "
-              f"T_core={params.get('T_core', -1):.0f} Mg#={params.get('Mg#', -1):.3f})")
-        return None
-
-    return {
-        'depth_km':  np.interp(P, _pres_gpa, _pres_depth),
-        'P_GPa':     P,
-        'T_K':       T,
-        'S':         np.full(n, S_lit),
-        'Vp':        Vp,
-        'Vs':        Vs,
-        'rho':       rho,
-        'P_profile': P,
-        'T_profile': T,
-    }
-
-
 class _PDFail(Exception):
     """相圖/EoS 在求根過程中失敗 → 外層 reject 該樣本"""
     pass
 
+def _sc_interface_state(h_s, T_core, z_bml, P_bml, Mg_bulk, D, rho_S, n_seg=5):
+    z_int = z_bml[0] + h_s
+    P_int = float(np.interp(z_int, z_bml, P_bml))
+    P_bot = float(P_bml[-1])
+    if n_seg is None:
+        P_path = np.concatenate([P_bml[z_bml > z_int][::-1], [P_int]])
+    else:
+        P_path = np.linspace(P_bot, P_int, n_seg + 1)[1:]
 
-def _interface_state(h_s, T_core, P_top, P_bottom, Mg_bulk, bml_thickness, rho_S):
-    """給定試探 h_solid,回傳 (h_pred, pd, T_interface, P_int, rho_L_int) 或 None。
-    內層 3 次小迭代處理 dTdP 對 XL 的弱依賴(收斂極快)。
-    rho_S (g/cm3) 由外層的自洽迴圈提供。"""
-    P_int = P_top + (P_bottom - P_top) * h_s / bml_thickness
-    XL_g  = Mg_bulk
-    pd    = None
-    T_int = T_core
+    XL_g, pd, T_int = Mg_bulk, None, T_core
     for _ in range(3):
-        dTdP = liquid_adiabat_dTdP(P_bottom, T_core, XL_g)
-        if not np.isfinite(dTdP):
-            return None
-        T_int = T_core - dTdP * (P_bottom - P_int)
+        T_p, P_p = T_core, P_bot
+        for Pk in P_path:
+            dTdP = liquid_adiabat_dTdP(0.5*(P_p + float(Pk)), T_p, XL_g)
+            if not np.isfinite(dTdP): return None
+            T_p += dTdP*(float(Pk) - P_p); P_p = float(Pk)
+        T_int = T_p
         pd = bml_phase_diagram(T_int, P_int, Mg_bulk)
-        if pd is None:
-            return None
+        if pd is None: return None
         if pd['melting'] and np.isfinite(pd.get('XL', np.nan)):
             XL_g = pd['XL']
-    if not pd['melting']:                      # 全固:界面收在 CMB
-        return bml_thickness, pd, T_int, P_int, np.nan
-    if pd['f_solid'] < 1e-3:                   # 全熔
+
+    if not pd['melting']:
+        return D, pd, T_int, P_int, np.nan
+    if pd['f_solid'] < 1e-3:
         return 0.0, pd, T_int, P_int, np.nan
-    rho_L_int, _, _ = liquid_bml_properties(P_int, T_int, pd['XL'])
-    if not np.isfinite(rho_L_int):
+    rho_L, _, _ = liquid_bml_properties(P_int, T_int, pd['XL'])
+    if not np.isfinite(rho_L):
         return None
-    phi_S = mole_to_volume_fraction(pd['f_solid'], pd['XS'], pd['XL'],
-                                    rho_S, rho_L_int)
-    return bml_thickness * phi_S, pd, T_int, P_int, rho_L_int
-
-
-def run_ngibbs_bml(params, T_core, T_mantle_bottom, true_cmb_depth, n_points=20):
-    bml_thickness = params['BML_thickness']
-    Mg_bulk       = params['Mg#_bulk_bml']
-    bml_top_depth = true_cmb_depth - bml_thickness
-    P_top         = max(float(pressure_mars(bml_top_depth)), 5.0)
-    P_bottom      = float(pressure_mars(true_cmb_depth))
-
-    Ra            = np.nan
-    thermal_state = 'undefined'
-
-    # ── 自洽界面 + 自洽 rho_S ────────────────────────────────────────────────
-    # 內層:未知數 h_solid,殘差 g(h) = h − h_pred(h)。
-    #        g(0) = −h_pred(0) ≤ 0、g(D) = D − h_pred(D) ≥ 0 恆成立 → bracket 保證存在。
-    # 外層:rho_S 由 nGibbs 在解出的 (XS, P_int, T_int) 現算,最多兩趟。
-    #        不在 brentq 內部呼叫 nGibbs —— 那會慢十倍。
-    rho_S = _RHO_S_CONST
-    for _pass in range(2):
+    phi_S = mole_to_volume_fraction(pd['f_solid'], pd['XS'], pd['XL'], rho_S, rho_L)
+    return D*phi_S, pd, T_int, P_int, rho_L
+ 
+ 
+def sc_bml(params, z_bml, P_bml_init, g_bml, T_mantle_bottom, n_pass=3):
+    """回傳 BML 在 z_bml 上的 rho, Vp, Vs, T, P 以及狀態量。
+    P 在層內自積:dP = rho g dz,從 P_bml_init[0](地函底壓力)起算。"""
+    D       = params['BML_thickness']
+    Mg_bulk = params['Mg#_bulk_bml']
+    T_core  = params['T_core']
+    P_top   = float(P_bml_init[0])
+    P_bml   = np.array(P_bml_init, float)
+    rho_S   = _RHO_S_CONST
+    out     = None
+ 
+    for _p in range(n_pass):
+        # ── 內層:解 h_solid ────────────────────────────────────────────────
+        n_seg = None if _p == n_pass - 1 else 5
         def _resid(h_s):
-            st = _interface_state(h_s, T_core, P_top, P_bottom, Mg_bulk,
-                                  bml_thickness, rho_S)
+            st = _sc_interface_state(h_s, T_core, z_bml, P_bml, Mg_bulk, D,
+                                     rho_S, n_seg=n_seg)
             if st is None:
                 raise _PDFail()
             return h_s - st[0]
         try:
-            g0 = _resid(0.0)
-            gD = _resid(bml_thickness)
-            if gD <= 0.0:                # h_pred(D) >= D → 全固
-                h_solid_km = bml_thickness
-            elif g0 >= 0.0:              # h_pred(0) <= 0 → 全熔
-                h_solid_km = 0.0
+            g0, gD = _resid(0.0), _resid(D)
+            if gD <= 0.0:
+                h_solid = D
+            elif g0 >= 0.0:
+                h_solid = 0.0
             else:
-                h_solid_km = brentq(_resid, 0.0, bml_thickness, xtol=0.5)  # 0.5 km
+                h_solid = brentq(_resid, 0.0, D, xtol=0.5)
+            st = _sc_interface_state(h_solid, T_core, z_bml, P_bml, Mg_bulk, D,
+                                     rho_S, n_seg=n_seg)
+            if st is None:
+                print(f"  sc_bml pass {_p}: interface state None at "
+                      f"h_solid={h_solid:.1f} km")
+                return None
         except _PDFail:
+            print(f"  sc_bml pass {_p}: phase/EoS failed  "
+                  f"P_top={P_top:.2f} P_bot={float(P_bml[-1]):.2f} "
+                  f"Mg_bulk={Mg_bulk:.3f} T_core={T_core:.0f} D={D:.0f}")
             return None
-
-        st = _interface_state(h_solid_km, T_core, P_top, P_bottom, Mg_bulk,
-                              bml_thickness, rho_S)
-        if st is None:
-            return None
-        _, pd, T_interface, P_int, rho_L_int = st
-
-        # 全固 / 全熔 用不到 rho_S(沒有兩相體積換算)→ 不必第二趟
-        if not (pd['melting'] and 1.0 <= h_solid_km < bml_thickness - 1e-9):
-            break
-        rho_new = rho_solid_ngibbs(pd['XS'], P_int, T_interface)
-        if not np.isfinite(rho_new) or rho_new <= 0:
-            return None
-        converged = abs(rho_new - rho_S) < 0.01
-        rho_S = rho_new          # 先更新,再決定是否停 → rho_S 與 h_solid_km 同步
-        if converged:
-            break
-
-    # ── 依解出的 h_solid 分三態,明確設定所有狀態變數 ─────────────────────────
-    if h_solid_km < 1.0:
-        # 全熔(含 brentq 解出 <1 km 殘餘固體的 snap)
-        h_solid_km, h_liquid_km = 0.0, bml_thickness
-        Mg_solid, Mg_liquid     = np.nan, Mg_bulk
-        Ra, thermal_state       = np.nan, 'molten'
-        dTdP = liquid_adiabat_dTdP(P_bottom, T_core, Mg_bulk)
-        if not np.isfinite(dTdP):
-            return None
-        T_interface = T_core - dTdP * (P_bottom - P_top)
-        P_int       = P_top
-    elif (not pd['melting']) or h_solid_km >= bml_thickness - 1e-9:
-        # 全固
-        h_solid_km, h_liquid_km = bml_thickness, 0.0
-        Mg_solid, Mg_liquid     = Mg_bulk, np.nan
-        T_interface, P_int      = T_core, P_bottom
-    else:
-        # 分層:成分從相圖取回
-        h_liquid_km         = bml_thickness - h_solid_km
-        Mg_solid, Mg_liquid = pd['XS'], pd['XL']
-
-    # Ra 事後診斷 (descriptor, not driver)
-    if h_solid_km >= 1.0:
-        Ra, thermal_state = compute_bml_thermal_state(
-            T_mantle_bottom, T_interface, h_solid_km, bml_top_depth,
-            rho_solid=rho_S * 1000.0)
-
-    print(f"  BML: Ra={Ra:.1e} [{thermal_state}]  "
-          f"h_sol={h_solid_km:.0f}km  h_liq={h_liquid_km:.0f}km  "
-          f"T_int={T_interface:.0f}K  rho_S={rho_S:.3f}  melt={pd['melting']}")
-
-    # ── Step 3a: nGibbs solid BML ─────────────────────────────────────────────
-    solid_data = None
-    if h_solid_km >= 1.0:
-        n_sol   = max(int(n_points * h_solid_km / bml_thickness), 3)
-        P_sol   = np.linspace(P_top, P_top + (P_bottom-P_top)*h_solid_km/bml_thickness, n_sol)
-        if thermal_state == 'convective':
-            delta = min(max(h_solid_km * (_RA_C / Ra)**(1.0/3.0),
-                        h_solid_km / n_sol),
-                        h_solid_km / 2.0)
-            T_i   = 0.5 * (T_mantle_bottom + T_interface)
-            z_rel = np.linspace(0.0, h_solid_km, n_sol)
-            T_sol = np.where(z_rel < delta,
-                     T_mantle_bottom + (T_i - T_mantle_bottom)*z_rel/delta,
-                     np.where(z_rel > h_solid_km - delta,
-                       T_i + (T_interface - T_i)*(z_rel-(h_solid_km-delta))/delta,
-                       T_i))
+        _, pd, T_int, P_int, rho_L_int = st
+ 
+        # ── 中層:rho_S 自洽 ────────────────────────────────────────────────
+        if pd['melting'] and 1.0 <= h_solid < D - 1e-9:
+            rho_new = rho_solid_ngibbs(pd['XS'], P_int, T_int)
+            if not np.isfinite(rho_new) or rho_new <= 0:
+                return None
+            rho_S = rho_new
+ 
+        # ── 三態與成分 ─────────────────────────────────────────────────────
+        Ra, state = np.nan, 'undefined'
+        if h_solid < 1.0:
+            h_solid, h_liquid = 0.0, D
+            Mg_sol, Mg_liq = np.nan, Mg_bulk
+            state = 'molten'
+            P_seg = np.linspace(float(P_bml[-1]), P_top, 6)[1:]
+            T_p, P_p = T_core, float(P_bml[-1])
+            for Pk in P_seg:
+                dTdP = liquid_adiabat_dTdP(0.5*(P_p + float(Pk)), T_p, Mg_bulk)
+                if not np.isfinite(dTdP): return None
+                T_p += dTdP*(float(Pk) - P_p); P_p = float(Pk)
+            T_int, P_int = T_p, P_top
+            P_int = P_top
+            pd = bml_phase_diagram(T_int, P_int, Mg_bulk)
+        elif (not pd['melting']) or h_solid >= D - 1e-9:
+            h_solid, h_liquid = D, 0.0
+            Mg_sol, Mg_liq = Mg_bulk, np.nan
+            T_int, P_int = T_core, float(P_bml[-1])
         else:
-            T_sol = np.linspace(T_mantle_bottom, T_interface, n_sol)
-
-        p_s = composition_from_params({'Mg#': Mg_solid, 'T_lit': T_mantle_bottom, 'P_lit': P_sol[0]})
-        O_s = compute_oxygen(p_s)
-
-        out_s = _ng_forward(P_sol, T_sol, _comp_values(p_s, O_s),
+            h_liquid = D - h_solid
+            Mg_sol, Mg_liq = pd['XS'], pd['XL']
+ 
+        if h_solid >= 1.0:
+            z_mid = z_bml[0] + h_solid/2.0
+            Ra, state = compute_bml_thermal_state(
+                T_mantle_bottom, T_int, h_solid, rho_S*1000.0,
+                float(np.interp(z_mid, z_bml, P_bml))*1e9,
+                float(np.interp(z_mid, z_bml, g_bml)))       
+ 
+        # ── 在 z_bml 上組出 T(z) ────────────────────────────────────────────
+        z_rel  = z_bml - z_bml[0]
+        is_sol = z_rel <= h_solid if h_solid >= 1.0 else np.zeros(len(z_bml), bool)
+        T = np.empty(len(z_bml))
+        if h_solid >= 1.0:
+            zs = z_rel[is_sol]
+            if state == 'convective' and Ra > 0:
+                delta = min(max(h_solid*(_RA_C/Ra)**(1.0/3.0), h_solid/len(z_bml)),
+                            h_solid/2.0)
+                T_i = 0.5*(T_mantle_bottom + T_int)
+                T[is_sol] = np.where(
+                    zs < delta, T_mantle_bottom + (T_i-T_mantle_bottom)*zs/delta,
+                    np.where(zs > h_solid-delta,
+                             T_i + (T_int-T_i)*(zs-(h_solid-delta))/delta, T_i))
+            else:
+                T[is_sol] = np.interp(zs, [0.0, max(h_solid, 1e-9)],
+                                      [T_mantle_bottom, T_int])
+        if (~is_sol).any():
+            # 液相段:絕熱線,以界面為起點往下積(dT/dP 隨 P 變,逐節點)
+            idx = np.flatnonzero(~is_sol)
+            T_prev, P_prev = T_int, P_int
+            for k in idx:
+                Mg_l = Mg_liq if np.isfinite(Mg_liq) else Mg_bulk
+                dTdP = liquid_adiabat_dTdP(0.5*(P_prev + float(P_bml[k])),
+                                           T_prev, Mg_l)
+                if not np.isfinite(dTdP):
+                    return None
+                T[k] = T_prev + dTdP*(P_bml[k] - P_prev)
+                T_prev, P_prev = T[k], P_bml[k]
+ 
+        # ── 在 z_bml 上組出 rho, Vp, Vs ────────────────────────────────────
+        rho = np.empty(len(z_bml)); Vp = np.empty(len(z_bml)); Vs = np.zeros(len(z_bml))
+        if is_sol.any():
+            Ps, Ts = P_bml[is_sol], T[is_sol]
+            p_s = composition_from_params({'Mg#': Mg_sol if np.isfinite(Mg_sol) else Mg_bulk,
+                                           'T_lit': T_mantle_bottom, 'P_lit': float(Ps[0])})
+            O_s = compute_oxygen(p_s)
+            o = _ng_forward(Ps, Ts, _comp_values(p_s, O_s),
                             NG_T_HEADERS, ['component_moles'])
-        pr     = _ng_props(out_s['component_moles'], P_sol, T_sol, ['rho', 'Vp', 'Vs'])
-        rho_s  = np.asarray(pr['rho'])
-        Vp_raw = np.asarray(pr['Vp'])
-        Vs_raw = np.asarray(pr['Vs'])
-
-        if not np.all(np.isfinite(rho_s)) or np.any(rho_s <= 0):
+            pr = _ng_props(o['component_moles'], Ps, Ts, ['rho', 'Vp', 'Vs'])
+            rho[is_sol] = pr['rho']; Vp[is_sol] = pr['Vp']; Vs[is_sol] = pr['Vs']
+        if (~is_sol).any():
+            for k in np.flatnonzero(~is_sol):
+                r_, v_, _ = liquid_bml_properties(
+                    float(P_bml[k]), float(T[k]),
+                    Mg_liq if np.isfinite(Mg_liq) else Mg_bulk)
+                rho[k], Vp[k], Vs[k] = r_, v_, 0.0
+        if not (np.all(np.isfinite(rho)) and np.all(rho > 0)
+                and np.all(np.isfinite(Vp))):
             return None
+ 
+        # ── 外層:層內壓力自積 ──────────────────────────────────────────────
+        dz  = np.diff(z_bml)*1e3
+        w = rho*1e3*g_bml
+        P_new = np.empty(len(z_bml)); P_new[0] = P_top
+        P_new[1:] = P_top + np.cumsum(0.5*(w[1:] + w[:-1])*dz)/1e9
+        dP = float(np.max(np.abs(P_new - P_bml)))
+        P_bml = P_new
+        out = dict(rho=rho, Vp=Vp, Vs=Vs, T=T, P=P_bml,
+                   h_solid_km=h_solid, h_liquid_km=h_liquid,
+                   Mg_solid=Mg_sol, Mg_liquid=Mg_liq, melting=pd['melting'],
+                   T_interface=T_int, P_interface=P_int,
+                   rho_S_interface=float(rho_S), Ra=Ra, thermal_state=state,
+                   n_pass=_p+1, dP_bml=dP)
+        if dP < SC_TOL_P:
+            break
+    return out
 
-        depth_s = np.interp(P_sol, _pres_gpa, _pres_depth)
-        solid_data = {'depth_km': depth_s, 'P_GPa': P_sol,
-                      'T_K': T_sol, 'Vp': np.asarray(Vp_raw), 'Vs': np.asarray(Vs_raw),
-                      'rho': rho_s, 'phi': np.zeros(n_sol)}
-
-    # ── Step 3b: liquid BML (Thomas EoS, Vs=0) ───────────────────────────────
-    liquid_data = None
-    if h_liquid_km >= 1.0 and not np.isnan(Mg_liquid):
-        n_liq   = max(int(n_points * h_liquid_km / bml_thickness), 3)
-        P_liq   = np.linspace(P_top + (P_bottom-P_top)*h_solid_km/bml_thickness, P_bottom, n_liq)
-        rho_liq = np.zeros(n_liq)
-        Vp_liq  = np.zeros(n_liq)
-        T_liq_arr = np.linspace(T_interface, T_core, n_liq)
-        for i in range(n_liq):
-            rho_liq[i], Vp_liq[i], _ = liquid_bml_properties(P_liq[i], T_liq_arr[i], Mg_liquid)
-
-        off = solid_data['depth_km'][-1] if solid_data is not None else np.interp(P_liq[0], _pres_gpa, _pres_depth)
-        depth_liq = np.interp(P_liq, _pres_gpa, _pres_depth)
-        clash = depth_liq <= off
-        if clash.any():
-            depth_liq[clash] = off + 0.002 * (np.arange(clash.sum()) + 1)
-
-        liquid_data = {'depth_km': depth_liq, 'P_GPa': P_liq,
-                       'T_K': T_liq_arr,
-                       'Vp': Vp_liq, 'Vs': np.zeros(n_liq),
-                       'rho': rho_liq, 'phi': np.ones(n_liq)}
-
-    if solid_data is None and liquid_data is None:
+def sc_build_profile(params, samuel_cache, verbose=False):
+    # 初值:z_lit 與 P 都先用 Samuel 場猜,只影響收斂速度不影響收斂點
+    z_lit = float(np.interp(params['P_lit'], _pres_gpa, _pres_depth))
+    z, lay, geo = sc_build_grid(params, z_lit)
+    if z is None:
+        print("  BML top above fixed layer -> reject"); return None
+    P = np.asarray(pressure_mars(z), float)
+    g = np.asarray(gravity_mars(z), float)
+    print(f"  init: P range {P.min():.3f}-{P.max():.3f} GPa, "
+          f"g range {g.min():.3f}-{g.max():.3f}, z range {z.min():.1f}-{z.max():.1f}")
+    hist = []
+    def _remap(z_old, lay_old, val_old, z_new, lay_new):
+        """把場從舊網格搬到新網格。層界有重複深度,不能直接 np.interp,
+        所以逐層做:每層內部深度嚴格遞增。"""
+        out = np.empty(len(z_new))
+        for L in (0, 1, 2, 3):
+            mo, mn = (lay_old == L), (lay_new == L)
+            if not mn.any():
+                continue
+            if not mo.any():
+                out[mn] = val_old[0]
+                continue
+            out[mn] = np.interp(z_new[mn], z_old[mo], val_old[mo])
+        return out
+    for it in range(SC_N_ITER):
+        z_new, lay_new, geo = sc_build_grid(params, z_lit)
+        if z_new is None:
+            return None
+        if it > 0 or len(z_new) != len(z):
+            P = _remap(z, lay, P, z_new, lay_new)
+            g = _remap(z, lay, g, z_new, lay_new)
+        z, lay = z_new, lay_new
+        m_fx  = (lay == 0); m_man = (lay == 1)
+        m_bml = (lay == 2); m_cor = (lay == 3)
+        n = len(z)
+        rho = np.zeros(n); T = np.zeros(n); Vp = np.zeros(n); Vs = np.zeros(n)
+        # ── 地殼 ────────────────────────────────────────────────────────────
+        r_cr, vp_cr, vs_cr, _ = sc_fixed_layer(z[m_fx], samuel_cache)
+        rho[m_fx], Vp[m_fx], Vs[m_fx] = r_cr*1e3, vp_cr, vs_cr
+        T[m_fx] = T_SURF + (params['T_lit'] - T_SURF)*np.clip(
+            P[m_fx]/params['P_lit'], 0.0, 1.0)
+ 
+        # ── 地函 ────────────────────────────────────────────────────────────
+        man = sc_mantle(params, P[m_man])
+        if man is None:
+            return None
+        rho[m_man], Vp[m_man], Vs[m_man], T[m_man] = man['rho']*1e3, man['Vp'], man['Vs'], man['T']
+        S_lit = man['S_lit']
+        T_mantle_bottom = float(T[m_man][-1])
+ 
+        # ── BML ─────────────────────────────────────────────────────────────
+        bml = sc_bml(params, z[m_bml], P[m_bml], g[m_bml], T_mantle_bottom)
+        if bml is None:
+            print("  BML failed -> reject")
+            return None
+        rho[m_bml], Vp[m_bml], Vs[m_bml] = bml['rho']*1e3, bml['Vp'], bml['Vs']
+        T[m_bml] = bml['T']
+        P[m_bml] = bml['P']
+ 
+        # ── 核 ──────────────────────────────────────────────────────────────
+        cor = sc_core(params, z[m_cor], float(P[m_bml][-1]), g[m_cor])
+        if cor is None:
+            print("  core EoS out of table range -> reject")
+            return None
+        rho[m_cor], Vp[m_cor], Vs[m_cor] = cor['rho'], cor['Vp'], cor['Vs']
+        T[m_cor], P[m_cor] = cor['T'], cor['P']
+ 
+        # ── 更新 g,重積 P,檢查收斂 ───────────────────────────────────────
+        g, M_r = sc_gravity(z, rho)
+        P_new  = sc_integrate_P(z, rho, g)
+        dP     = float(np.max(np.abs(P_new - P)))
+        P      = P_new
+        z_lit_new = float(np.interp(params['P_lit'], P[m_man], z[m_man]))
+        dz_lit    = abs(z_lit_new - z_lit)
+        z_lit     = z_lit_new
+        hist.append((dP, dz_lit))
+        if verbose:
+            print(f"    sc iter {it+1}: max|dP|={dP:7.4f} GPa  "
+                  f"dz_lit={dz_lit:6.2f} km  z_lit={z_lit:7.1f}  "
+                  f"P_bml_top={P[m_man][-1]:6.3f}  P_cmb={P[m_bml][-1]:6.3f}")
+        if dP < SC_TOL_P and dz_lit < 0.1:
+            break
+    else:
+        print(f"  self-consistent field did not converge "
+              f"(dP={hist[-1][0]:.3f} GPa, dz_lit={hist[-1][1]:.2f} km)")
         return None
-
-    # ── merge solid + liquid ──────────────────────────────────────────────────
-    parts = [d for d in [solid_data, liquid_data] if d is not None]
-    def cat(key): return np.concatenate([d[key] for d in parts])
-    depth = cat('depth_km'); P_GPa = cat('P_GPa'); T_K  = cat('T_K')
-    Vp    = cat('Vp');       Vs    = cat('Vs');     rho  = cat('rho'); phi = cat('phi')
-
-    oc_offset = depth[-1] - depth[0]
-    for i in range(len(Vs)):
-        if Vs[i] == 0.0:
-            oc_offset = depth[i] - depth[0]; break
-
-    if not (np.all(np.isfinite(Vp)) and np.all(np.isfinite(Vs)) and np.all(np.isfinite(rho))):
-        print(f"  nGibbs 產生 NaN/Inf → reject  (T_lit={params.get('T_lit', -1):.0f} "
-              f"T_core={params['T_core']:.0f} Mg#={params['Mg#']:.3f})")
-        return None
-
-    return {
-        'depth_km':                depth,
-        'P_GPa':                   P_GPa,
-        'T_K':                     T_K,
-        'Vp':                      Vp,
-        'Vs':                      Vs,
-        'rho':                     rho,
-        'phi':                     phi,
-        'outer_core_depth_offset': oc_offset,
-        'Ra':                      Ra,
-        'thermal_state':           thermal_state,
-        'h_solid_km':              h_solid_km,
-        'h_liquid_km':             h_liquid_km,
-        'Mg_solid':                Mg_solid if not np.isnan(Mg_solid) else -1.0,
-        'Mg_liquid':               Mg_liquid if not np.isnan(Mg_liquid) else -1.0,
-        'melting':                 pd['melting'],
-        'T_interface':             T_interface,
-        'rho_solid_bml':           float(np.mean(solid_data['rho']))  if solid_data  is not None else -1.0,
-        'rho_liquid_bml':          float(np.mean(liquid_data['rho'])) if liquid_data is not None else -1.0,
-        'rho_S_interface':         float(rho_S),
-        'P_interface':             float(P_int),
-        'interface_solver':        'brentq',
-    }
-
+ 
+    # ── 質量與慣量矩:同一條剖面,不再分層拼接 ────────────────────────────
+    g, M_r = sc_gravity(z, rho)
+    r = (MARS_RADIUS - z)*1e3
+    o = np.argsort(r)
+    ra, rhoa = r[o], rho[o]
+    rhm = 0.5*(rhoa[1:] + rhoa[:-1])
+    M   = float(np.sum(4*np.pi/3 *rhm*(ra[1:]**3 - ra[:-1]**3)))
+    I   = float(np.sum(8*np.pi/15*rhm*(ra[1:]**5 - ra[:-1]**5)))
+    moi = I/(M*MARS_RADIUS_M**2)
+    r_cor = (MARS_RADIUS - z[m_cor])[::-1]        # km,由中心往外
+    rho_c = (rho[m_cor]/1e3)[::-1]
+    rho_core_mean = float(3*np.trapezoid(rho_c*r_cor**2, r_cor)/r_cor[-1]**3)
+ 
+    return dict(
+        z_km=z, layer=lay, P_GPa=P, T_K=T, rho=rho/1e3, Vp=Vp, Vs=Vs, g=g,
+        z_lit=z_lit,
+        m_crust=m_fx, m_mantle=m_man, m_bml=m_bml, m_core=m_cor,
+        z_bml_top=geo['z_bml_top'], z_cmb=geo['z_cmb'],
+        P_bml_top=float(P[m_man][-1]), P_cmb=float(P[m_bml][-1]),
+        P_center=float(P[-1]), T_center=float(T[-1]),
+        T_mantle_bottom=float(T[m_man][-1]),
+        rho_mantle_bot=float(rho[m_man][-1]/1e3),
+        rho_bml_top=float(rho[m_bml][0]/1e3),
+        rho_bml_bot=float(rho[m_bml][-1]/1e3),
+        rho_core_top=float(rho[m_cor][0]/1e3),
+        rho_core_mean=rho_core_mean,
+        Vp_core_cmb=float(Vp[m_cor][0]),
+        core=cor,
+        M_pred=float(M), moi_pred=float(moi), S_lit=S_lit,
+        sc_n_iter=len(hist), sc_dP=hist[-1], bml=bml)
+ 
 
 # ── TauP ──────────────────────────────────────────────────────────────────────
 def _validate_nd_depths(*depth_arrays):
@@ -1120,251 +1245,210 @@ def _validate_nd_depths(*depth_arrays):
     if same.size > 1 and np.any(same[:-1] & same[1:]):
         raise ValueError("nd profile: >=3 consecutive identical depths (after rounding)")
 
-def build_taup(fort56_data, model_name, samuel_cache, bml_data=None):
+
+def build_taup(prof, model_name, samuel_cache):
+    """.nd 檔的四段全部來自同一條自洽剖面。
+ 
+    固定層(0-100 km)用 Samuel 的高解析度剖面(200 點),因為 TauP 的
+    地殼段需要比自洽網格更密的節點來解 pP/sP 的深度相位。
+    其餘三段(地函、BML、核)直接切自洽剖面。
+ 
+    流體邊界由 Vs 決定,不由層標籤決定:BML 可能整層固、整層液或分層,
+    所以要從資料本身找 Vs -> 0 的位置。
+    """
     os.makedirs(TAUP_WORK_DIR, exist_ok=True)
     model_name = model_name.replace(".npz", "")
     npz_path   = os.path.join(TAUP_WORK_DIR, f'{model_name}.npz')
     nd_path    = os.path.join(TAUP_WORK_DIR, f"{model_name}.nd")
     if os.path.exists(npz_path):
         return TauPyModel(model=npz_path)
-
-    true_cmb_depth = samuel_cache['true_cmb_depth']
-    bml_top_depth  = float(bml_data['depth_km'][0])
-
-    hef_depth   = fort56_data['depth_km']
-    mantle_mask = (hef_depth >= 100.0) & (hef_depth <= bml_top_depth)
-    man_depth   = hef_depth[mantle_mask]
-    man_Vp      = fort56_data['Vp'][mantle_mask]
-    man_Vs      = fort56_data['Vs'][mantle_mask]
-    man_rho     = fort56_data['rho'][mantle_mask]
-    if len(man_depth) == 0:
-        raise ValueError(f"Empty mantle depth range")
-
+ 
+    z, Vp, Vs, rho = prof['z_km'], prof['Vp'], prof['Vs'], prof['rho']
+    m_man, m_bml, m_cor = prof['m_mantle'], prof['m_bml'], prof['m_core']
+    z_cmb = prof['z_cmb']
+ 
+    def _bad(*arrs):
+        for a in arrs:
+            a = np.asarray(a, float)
+            if a.size == 0 or not np.all(np.isfinite(a)):
+                return True
+        return False
+    if _bad(Vp[m_man], Vs[m_man], rho[m_man], Vp[m_bml], Vs[m_bml], rho[m_bml],
+            Vp[m_cor], rho[m_cor]):
+        raise ValueError("profile has non-finite Vp/Vs/rho")
+    if np.any(Vp[m_man] <= 0) or np.any(Vp[m_bml] <= 0) or np.any(rho[m_man] <= 0):
+        raise ValueError("profile has non-positive Vp/rho")
+ 
+    _validate_nd_depths(z[m_man], z[m_bml])
+    H_MIN_LAYER = 1.0   # km, 薄於此值的層不寫進 .nd
     with open(nd_path, 'w') as f:
+        # ── 固定層:Samuel 高解析度 ────────────────────────────────────────
         for d, vp, vs, r in zip(samuel_cache['crust_z'], samuel_cache['crust_vp'],
-                                 samuel_cache['crust_vs'], samuel_cache['crust_rho']):
+                                samuel_cache['crust_vs'], samuel_cache['crust_rho']):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
         f.write("mantle\n")
-        for d, vp, vs, r in zip(man_depth, man_Vp, man_Vs, man_rho):
+ 
+        # ── 地函 ──────────────────────────────────────────────────────────
+        for d, vp, vs, r in zip(z[m_man], Vp[m_man], Vs[m_man], rho[m_man]):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
-
-        bml_depth = bml_data['depth_km']
-        bml_vp    = bml_data['Vp']
-        bml_vs    = bml_data['Vs']
-        bml_rho   = bml_data['rho']
-        bml_mask  = (bml_depth >= bml_top_depth) & (bml_depth <= true_cmb_depth)
-
-        d_b   = bml_depth[bml_mask]
-        vp_b  = bml_vp[bml_mask]
-        vs_b  = bml_vs[bml_mask]
-        rho_b = bml_rho[bml_mask]
-
-        # --- NaN/Inf to TauP  ---
-        def _bad(*arrs):
-            for a in arrs:
-                a = np.asarray(a, dtype=float)
-                if a.size == 0 or not np.all(np.isfinite(a)):
-                    return True
-            return False
-        if _bad(man_Vp, man_Vs, man_rho, vp_b, vs_b, rho_b):
-            raise ValueError("profile has non-finite Vp/Vs/rho (nGibbs out of range)")
-        if np.any(man_Vp <= 0) or np.any(vp_b <= 0) or np.any(man_rho <= 0):
-            raise ValueError("profile has non-positive Vp/rho")
-
-        _validate_nd_depths(man_depth, d_b)
-        # first index where Vs vanishes (melt correction can zero Vs inside the
-        # nominally solid layer, so locate the fluid boundary from the data itself)
+ 
+        # ── BML:固相段照寫,遇到 Vs -> 0 就開 outer-core ────────────────
+        d_b, vp_b, vs_b, rho_b = z[m_bml], Vp[m_bml], Vs[m_bml], rho[m_bml]
         zero = np.where(vs_b <= 1e-6)[0]
         i0   = int(zero[0]) if len(zero) else len(d_b)
+ 
+        # 液相段厚度 = z_cmb - 液相起點;太薄就當作整層固相
+        # (否則 z_cmb 會被寫三次: 界面上側 / 零厚度液相 / 核心頂,TauP segfault)
+        if i0 < len(d_b) and (z_cmb - d_b[i0]) < H_MIN_LAYER:
+            d_b, vp_b, vs_b, rho_b = d_b[:i0], vp_b[:i0], vs_b[:i0], rho_b[:i0]
+            i0 = len(d_b)
 
-        # solid part (Vs > 0)
+        # 固相段厚度太薄就當作整層液相,液相從地函底直接開始
+        if i0 > 0 and (d_b[i0-1] - d_b[0]) < H_MIN_LAYER:
+            d_b, vp_b, vs_b, rho_b = d_b[i0:], vp_b[i0:], vs_b[i0:], rho_b[i0:]
+            i0 = 0
+
         for d, vp, vs, r in zip(d_b[:i0], vp_b[:i0], vs_b[:i0], rho_b[:i0]):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
 
         if i0 < len(d_b):
-            # fluid starts inside the BML: discontinuity at d_b[i0]
-            d_oc = d_b[i0]
             if i0 > 0:
                 vp_s, vs_s, rho_s = vp_b[i0-1], vs_b[i0-1], rho_b[i0-1]
             else:
-                vp_s, vs_s, rho_s = man_Vp[-1], man_Vs[-1], man_rho[-1]
-            f.write(f"{d_oc:.3f}  {vp_s:.4f}  {vs_s:.4f}  {rho_s:.4f}\n")
+                vp_s, vs_s, rho_s = Vp[m_man][-1], Vs[m_man][-1], rho[m_man][-1]
+            f.write(f"{d_b[i0]:.3f}  {vp_s:.4f}  {vs_s:.4f}  {rho_s:.4f}\n")
             f.write("outer-core\n")
             for d, vp, r in zip(d_b[i0:], vp_b[i0:], rho_b[i0:]):
                 f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
         else:
-            # fully solid BML: fluid boundary is the CMB itself
-            f.write(f"{true_cmb_depth:.3f}  {vp_b[-1]:.4f}  {vs_b[-1]:.4f}  {rho_b[-1]:.4f}\n")
+            # BML 全固:流體邊界就是 CMB
+            # d_b[-1] 可能已經等於 z_cmb,再寫一次就是零厚度層
+            if z_cmb - d_b[-1] > 1e-6:
+                f.write(f"{z_cmb:.3f}  {vp_b[-1]:.4f}  {vs_b[-1]:.4f}  {rho_b[-1]:.4f}\n")
             f.write("outer-core\n")
-
-        core_z   = samuel_cache['core_z']
-        core_vp  = samuel_cache['core_vp']
-        core_rho = samuel_cache['core_rho']
-        mask     = core_z >= true_cmb_depth
-        f.write(f"{true_cmb_depth:.3f}  {core_vp[mask][0]:.4f}  0.0000  {core_rho[mask][0]:.4f}\n")
-        for d, vp, r in zip(core_z[mask][1:], core_vp[mask][1:], core_rho[mask][1:]):
+        # ── 核 ────────────────────────────────────────────────────────────
+        d_c, vp_c, rho_c = z[m_cor], Vp[m_cor], rho[m_cor]
+        f.write(f"{z_cmb:.3f}  {vp_c[0]:.4f}  0.0000  {rho_c[0]:.4f}\n")
+        for d, vp, r in zip(d_c[1:], vp_c[1:], rho_c[1:]):
             f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
+        
+    zz = np.array([float(l.split()[0]) for l in open(nd_path)
+                   if l.strip() and not l[0].isalpha()])
+    _, cnt = np.unique(zz, return_counts=True)
+    if (cnt > 2).any():
+        raise ValueError(f"nd has depth repeated >2x: {np.unique(zz)[cnt > 2]}")
 
     build_taup_model(nd_path, output_folder=TAUP_WORK_DIR)
     return TauPyModel(model=npz_path)
 
-# ── mass and MoI ──────────────────────────────────────────────────────────────
-def compute_mass_and_moi(fort56_data, samuel_cache, bml_data):
-    R           = MARS_RADIUS_M
-    true_cmb_km = samuel_cache['true_cmb_depth']
-    bml_top_km  = float(bml_data['depth_km'][0])
-
-    # crust: Samuel profile from surface to crust base (~100 km)
-    crust_z      = samuel_cache['crust_z']
-    crust_rho    = samuel_cache['crust_rho']
-    crust_mask   = crust_z <= 100.0
-    crust_r      = R - crust_z[crust_mask] * 1000
-    crust_rho_si = crust_rho[crust_mask] * 1000
-
-    # mantle: depths are absolute (Samuel P-z scale), 100 km -> BML top
-    hef_depth    = fort56_data['depth_km']
-    mantle_mask  = (hef_depth >= 100.0) & (hef_depth <= bml_top_km + 1.0)
-    man_r        = R - hef_depth[mantle_mask] * 1000
-    man_rho_si   = fort56_data['rho'][mantle_mask] * 1000
-
-    # BML
-    bml_depth  = bml_data['depth_km']
-    bml_mask   = (bml_depth >= bml_top_km) & (bml_depth <= true_cmb_km)
-    bml_r      = R - bml_depth[bml_mask] * 1000
-    bml_rho_si = bml_data['rho'][bml_mask] * 1000
-
-    # core: Samuel profile below CMB
-    core_z      = samuel_cache['core_z']
-    core_rho    = samuel_cache['core_rho']
-    core_mask   = core_z >= true_cmb_km
-    core_r      = R - core_z[core_mask] * 1000
-    core_rho_si = core_rho[core_mask] * 1000
-
-    all_r   = np.concatenate([core_r, bml_r, man_r, crust_r])
-    all_rho = np.concatenate([core_rho_si, bml_rho_si, man_rho_si, crust_rho_si])
-    idx     = np.argsort(all_r)
-    all_r, all_rho = all_r[idx], all_rho[idx]
-
-    M   = 4 * np.pi * np.trapezoid(all_rho * all_r**2, all_r)
-    I   = (8*np.pi/3) * np.trapezoid(all_rho * all_r**4, all_r)
-    return M, I / (M * R**2)
-
 # ── solidus penalty ───────────────────────────────────────────────────────────
-def compute_solidus_penalty(fort56_data, params, true_cmb_depth):
-    P_prof = fort56_data.get('P_profile')
-    T_prof = fort56_data.get('T_profile')
-    if P_prof is None or T_prof is None:
+def compute_solidus_penalty(prof, params):
+    """地函段沿自洽地溫線是否超過固相線。
+    罰的是全球 1-D 平均剖面出現可觀的部分熔融(SOLIDUS_SIGMA = 12 K 約對應 1%),
+    不排除局部熔融 —— 火星的零星火山活動來自局部上湧或揮發分降低固相線,
+    那不是 1-D 平均剖面該表現的東西。"""
+    m   = prof['m_mantle']
+    P_m = prof['P_GPa'][m]
+    T_m = prof['T_K'][m]
+    sel = P_m >= params['P_lit']
+    if not sel.any():
         return 0.0
-    bml_top_km  = true_cmb_depth - params['BML_thickness']
-    P_bml_top   = float(pressure_mars(bml_top_km))
-    mask        = (P_prof >= params['P_lit']) & (P_prof <= P_bml_top)
-    P_m, T_m   = P_prof[mask], T_prof[mask]
-    if len(P_m) == 0:
-        return 0.0
-    # Mg#-dependent: more Fe lowers the solidus (Elkins-Tanton 2008), exactly as in
-    # Drilleau 2026. The fixed Mg#=0.75 curve made this penalty blind to Mg#.
-    T_sol_arr   = np.array([solidus_duncan_Mg(p, params['Mg#']) for p in P_m])
-    excess  = np.clip(T_m - T_sol_arr, 0.0, None)
-    penalty = min((np.max(excess) / SOLIDUS_SIGMA)**2, SOLIDUS_CAP) if len(excess) else 0.0
+    P_m, T_m = P_m[sel], T_m[sel]
+    T_sol  = np.array([solidus_duncan_Mg(p, params['Mg#']) for p in P_m])
+    excess = np.clip(T_m - T_sol, 0.0, None)
+    penalty = min((float(np.max(excess))/SOLIDUS_SIGMA)**2, SOLIDUS_CAP)
     if penalty > 0:
-        print(f"  Solidus penalty = {penalty:.4f}")
+        i = int(np.argmax(excess))
+        print(f"  Solidus penalty = {penalty:.4f}  "
+              f"(max excess {excess[i]:.1f} K at P={P_m[i]:.2f} GPa)")
     return penalty
 
 # ── misfit ────────────────────────────────────────────────────────────────────
-def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
-                   true_cmb_depth=None,
+
+def compute_misfit(taup_model, obs_dataset, prof, params=None,
                    mass_sigma=0.0, moi_sigma=0.0, grav_sigma=0.0, ric_sigma=0.0):
     phases_std   = ['P', 'S', 'pP', 'sP', 'PP', 'PPP', 'SS', 'SSS', 'sS', 'ScS', 'SKS']
     phases_pdiff = phases_std + ['Pdiff']
-
-    tt_total    = 0.0   # Σ over events of each event's MEAN residual
-    tt_n_ev     = 0     # events that contributed
-    tt_n_ph     = 0     # total phases used (report only)
-    tt_n_miss   = 0     # phases that the model could not predict
-    tt_n_capped = 0     # present phases whose residual hit RES_CAP
-    miss_by_event = {}  # per-event miss count (the penalty is diluted by ev_n,
-                        # so its strength varies ~4x between 2-phase and 8-phase events)
-
+ 
+    tt_total, tt_n_ev, tt_n_ph, tt_n_miss, tt_n_capped = 0.0, 0, 0, 0, 0
+    miss_by_event = {}
+ 
     for event, obs in obs_dataset.items():
-        delta = obs['delta']
-        depth = obs.get('depth', 10.0)
         try:
             arrivals = taup_model.get_travel_times(
-                source_depth_in_km=depth, distance_in_degree=delta,
+                source_depth_in_km=obs.get('depth', 10.0),
+                distance_in_degree=obs['delta'],
                 phase_list=phases_pdiff if event == 'S1000a' else phases_std)
         except Exception as e:
             print(f"  {event}: FAILED {e}"); continue
-
+ 
         times = {}
         for a in arrivals:
             if a.name not in times:
                 times[a.name] = a.time
-        def _tdiff(times, a, b):
+        def _tdiff(a, b):
             ta, tb = times.get(a), times.get(b)
             return None if (ta is None or tb is None) else ta - tb
-
+ 
         pred = {
-            'S-P':              _tdiff(times, 'S',   'P'),
-            'pP-P':             _tdiff(times, 'pP',  'P'),
-            'sP-P':             _tdiff(times, 'sP',   'P'),
-            'PP-P':             _tdiff(times, 'PP',   'P'),
-            'PPP-P':            _tdiff(times, 'PPP',  'P'),
-            'sS-S':             _tdiff(times, 'sS',   'S'),
-            'SS-S':             _tdiff(times, 'SS',   'S'),
-            'SSS-S':            _tdiff(times, 'SSS',  'S'),
-            'ScS-S':            _tdiff(times, 'ScS',  'S'),
-            'SS-PP':            _tdiff(times, 'SS',   'PP'),
-            'SKS-PP':           _tdiff(times, 'SKS',  'PP'),
-            'PP-PbdiffPcP':     _tdiff(times, 'PP',   'Pdiff'),
+            'S-P':          _tdiff('S',   'P'),
+            'pP-P':         _tdiff('pP',  'P'),
+            'sP-P':         _tdiff('sP',  'P'),
+            'PP-P':         _tdiff('PP',  'P'),
+            'PPP-P':        _tdiff('PPP', 'P'),
+            'sS-S':         _tdiff('sS',  'S'),
+            'SS-S':         _tdiff('SS',  'S'),
+            'SSS-S':        _tdiff('SSS', 'S'),
+            'ScS-S':        _tdiff('ScS', 'S'),
+            'SS-PP':        _tdiff('SS',  'PP'),
+            'SKS-PP':       _tdiff('SKS', 'PP'),
+            'PP-PbdiffPcP': _tdiff('PP',  'Pdiff'),
         }
-
+ 
         ev_sum, ev_n, ev_miss = 0.0, 0, 0
         for phase, obs_val in obs.items():
             if phase in ('delta', 'depth') or not isinstance(obs_val, tuple):
                 continue
             p_val = pred.get(phase)
             if p_val is None:
-                # model cannot predict this phase (shadow zone / caustic)
                 ev_sum += MISS_PENALTY; ev_n += 1; ev_miss += 1
                 continue
             obs_t, sigma = obs_val
             if sigma <= 0 or not np.isfinite(obs_t):
-                continue                 # data problem: do not penalise the model
-            res_sigma = abs(obs_t - p_val) / sigma
+                continue
+            res_sigma = abs(obs_t - p_val)/sigma
             if not np.isfinite(res_sigma):
                 ev_sum += MISS_PENALTY; ev_n += 1; ev_miss += 1
                 continue
             if res_sigma >= RES_CAP:
                 tt_n_capped += 1
             ev_sum += min(res_sigma, RES_CAP); ev_n += 1
-
+ 
         if ev_n > 0:
-            tt_total  += ev_sum / ev_n
+            tt_total  += ev_sum/ev_n
             tt_n_ev   += 1
             tt_n_ph   += ev_n - ev_miss
             tt_n_miss += ev_miss
             miss_by_event[event] = ev_miss
-
+ 
     tt_misfit = tt_total if tt_n_ev > 0 else 999.0
     if not np.isfinite(tt_misfit):
         tt_misfit = 999.0
-
     n_ev_expected = len(obs_dataset)
     if tt_n_ev < n_ev_expected:
-        tt_misfit += EVENT_FAIL * (n_ev_expected - tt_n_ev)
-
-    solidus_penalty = (compute_solidus_penalty(fort56_data, params, true_cmb_depth)
-                       if params else 0.0)
-    total_misfit = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma + ric_sigma
-    if not np.isfinite(total_misfit):
-        total_misfit = 999.0
-
+        tt_misfit += EVENT_FAIL*(n_ev_expected - tt_n_ev)
+ 
+    solidus_penalty = compute_solidus_penalty(prof, params) if params else 0.0
+    total = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma + ric_sigma
+    if not np.isfinite(total):
+        total = 999.0
+ 
     print(f"  TT={tt_misfit:.4f}(events={tt_n_ev}/{n_ev_expected}, phases={tt_n_ph}, "
-          f"miss={tt_n_miss}, capped={tt_n_capped})  "
-          f"solidus={solidus_penalty:.4f}  mass={mass_sigma:.2f}σ  "
-          f"moi={moi_sigma:.2f}σ  grav={grav_sigma:.2f}σ  ric={ric_sigma:.2f}σ  total={total_misfit:.4f}")
-
-    return total_misfit, tt_n_ph, {
+          f"miss={tt_n_miss}, capped={tt_n_capped})  solidus={solidus_penalty:.4f}  "
+          f"mass={mass_sigma:.2f}s  moi={moi_sigma:.2f}s  grav={grav_sigma:.2f}s  "
+          f"ric={ric_sigma:.2f}s  total={total:.4f}")
+ 
+    return total, tt_n_ph, {
         'misfit_tt': tt_misfit, 'misfit_solidus': solidus_penalty,
         'grav_sigma': grav_sigma, 'ric_sigma': ric_sigma,
         'tt_n_ev': tt_n_ev, 'tt_n_ph': tt_n_ph, 'tt_n_miss': tt_n_miss,
@@ -1373,120 +1457,112 @@ def compute_misfit(taup_model, obs_dataset, fort56_data, bml_data, params=None,
 
 # ── forward model ─────────────────────────────────────────────────────────────
 def forward(params, run_dir, model_name, samuel_cache):
-    true_cmb_depth = samuel_cache['true_cmb_depth']
-    bml_top_km     = true_cmb_depth - params['BML_thickness']
-    P_bml_top      = float(pressure_mars(bml_top_km))
-
-    # ── a26: Fe-S EoS core profile (replaces fixed Samuel core) ──────────────
-    # P_cmb 來自 Samuel 壓力場(非完全自洽,第一版近似;w_S 掃 0.05-0.30 時
-    # 漂移 < 0.3 GPa,可接受)。R_cmb 固定為 Samuel 的 metal CMB。
-    R_cmb_km = MARS_RADIUS - true_cmb_depth
-    P_cmb    = float(pressure_mars(true_cmb_depth))
-    core_prof = CF.build_core_profile(params['T_core'], params['w_S'],
-                                      R_cmb_km=R_cmb_km, P_cmb=P_cmb)
-    if core_prof is None:
-        print("  core EoS failed (out of table range) → reject")
+    """a36:一條自洽剖面決定一切。
+ 
+    回傳 (misfit, n_data, components, prof, None)
+    第四個位置從 fort56_data 換成 prof(整條剖面),第五個保留 None
+    以維持呼叫端的 5-tuple 介面。
+    """
+    prof = sc_build_profile(params, samuel_cache, verbose=True)
+    if prof is None:
         return None, None, None, None, None
-
-    core_z_eos   = np.append(MARS_RADIUS - core_prof['r']/1e3, MARS_RADIUS)
-    core_vp_eos  = np.append(core_prof['Vp'],      core_prof['Vp'][-1])
-    core_rho_eos = np.append(core_prof['rho']/1e3, core_prof['rho'][-1]/1e3)
-    cache_eff = {**samuel_cache,
-                 'core_z':   core_z_eos,
-                 'core_vp':  core_vp_eos,
-                 'core_vs':  np.zeros_like(core_z_eos),
-                 'core_rho': core_rho_eos}
-
-    R_ic = CF.find_R_IC(core_prof)      # 靜態 ICB 溫度計;固核密度未回饋(見 notes)
+ 
+    bml = prof['bml']
+    print(f"  sc: {prof['sc_n_iter']} iters  dP={prof['sc_dP'][0]:.4f} GPa  "
+          f"z_lit={prof['z_lit']:.1f}km  P_bml_top={prof['P_bml_top']:.2f}  "
+          f"P_cmb={prof['P_cmb']:.2f}  P_c={prof['P_center']:.1f}GPa")
+    print(f"  BML: Ra={bml['Ra']:.1e} [{bml['thermal_state']}]  "
+          f"h_sol={bml['h_solid_km']:.0f}km  h_liq={bml['h_liquid_km']:.0f}km  "
+          f"T_int={bml['T_interface']:.0f}K  rho_S={bml['rho_S_interface']:.3f}  "
+          f"melt={bml['melting']}")
+ 
+    # ── 內核:靜態 ICB 溫度計,由自洽核剖面判定 ──────────────────────────
+    cor  = prof['core']
+    R_ic = CF.find_R_IC(cor)
+    gap  = CF.gap_min(cor)
     ric_sigma = 0.0
-    if USE_RIC_LIKELIHOOD:
-        ric_sigma = abs(BI_RIC_KM - R_ic) / BI_RIC_SIG
-        ric_sigma += max(0.0, (R_ic - RIC_MAX_KM) / 50.0)   # InSight R_ic<750 km 軟上限
-    print(f"  core: w_S={params['w_S']:.3f}  P_c={core_prof['P_center']:.1f}GPa  "
-          f"T_c={core_prof['T_center']:.0f}K  rho_mean={core_prof['rho_mean']/1e3:.3f}  "
-          f"Vp_cmb={core_prof['Vp'][0]:.2f}  R_ic={R_ic:.0f}km")
-
-    fort56_data = run_ngibbs(params, P_bml_top=P_bml_top)
-    if fort56_data is None:
-        return None, None, None, None, None
-
-    T_profile = fort56_data.get('T_profile')
-    P_profile = fort56_data.get('P_profile')
-    T_mantle_bottom = (float(np.interp(P_bml_top, P_profile, T_profile))
-                       if T_profile is not None else float(fort56_data['T_K'][-1]))
-    rho_mantle_bot = float(fort56_data['rho'][-1])
-    print(f"  T_mantle_bottom={T_mantle_bottom:.1f}K  P_bml_top={P_bml_top:.2f}GPa  "
-          f"rho_bot={rho_mantle_bot:.4f}")
-
-    bml_raw = run_ngibbs_bml(params,
-                             T_core=params['T_core'],
-                             T_mantle_bottom=T_mantle_bottom,
-                             true_cmb_depth=true_cmb_depth)
-    if bml_raw is None:
-        print("  BML failed → reject"); return None, None, None, None, None
-
-    bml_raw['depth_km'] = bml_raw['depth_km'] - bml_raw['depth_km'][0] + bml_top_km
-    bml_raw['outer_core_depth_abs'] = bml_top_km + bml_raw['outer_core_depth_offset']
-
-    rho_bml_top    = float(bml_raw['rho'][0])
-    rho_bml_bot    = float(bml_raw['rho'][-1])
-    rho_core_top   = float(cache_eff['core_rho'][0])   # a26: EoS 核頂密度 (Kono 穩定性)
-
-    bml_raw['upper_contrast'] = rho_bml_top - rho_mantle_bot
-    bml_raw['lower_contrast'] = rho_core_top - rho_bml_bot
-    print(f"  density contrasts: upper={bml_raw['upper_contrast']:+.4f}  "
-          f"lower={bml_raw['lower_contrast']:+.4f}")
-
-    grav_sigma = (max(0.0, -bml_raw['upper_contrast']) +
-                  max(0.0, -bml_raw['lower_contrast'])) / GRAV_SCALE
+    if GAP_ON:
+        # gap <= 0 已滿足內核存在,不罰;gap > 0 線性罰
+        ric_sigma  = max(0.0, gap)/GAP_SIGMA if np.isfinite(gap) else 0.0
+        ric_sigma += max(0.0, (R_ic - RIC_MAX_KM))/RIC_MAX_SIG
+    print(f"  core: w_S={params['w_S']:.3f}  T_c={prof['T_center']:.0f}K  "
+          f"rho_mean={prof['rho_core_mean']:.3f}  Vp_cmb={prof['Vp_core_cmb']:.2f}  "
+          f"R_ic={R_ic:.0f}km  gap={gap:+.0f}K")
+ 
+    # ── Kono 密度對比:BML 必須比上方地函重、比下方核輕 ────────────────
+    upper_contrast = prof['rho_bml_top'] - prof['rho_mantle_bot']
+    lower_contrast = prof['rho_core_top'] - prof['rho_bml_bot']
+    print(f"  density contrasts: upper={upper_contrast:+.4f}  "
+          f"lower={lower_contrast:+.4f}")
+ 
+    grav_sigma = (max(0.0, -upper_contrast) + max(0.0, -lower_contrast))/GRAV_SCALE
     if REJECT_GRAV_UNSTABLE and grav_sigma > 0:
-        if bml_raw['upper_contrast'] <= 0.0: _GRAV_FAIL['upper'] += 1
-        if bml_raw['lower_contrast'] <= 0.0: _GRAV_FAIL['lower'] += 1
-        print("  BML gravitationally unstable → reject (Kono 2025)")
+        if upper_contrast <= 0.0: _GRAV_FAIL['upper'] += 1
+        if lower_contrast <= 0.0: _GRAV_FAIL['lower'] += 1
+        print("  BML gravitationally unstable -> reject (Kono 2025)")
         return None, None, None, None, None
-
-    bml_data = bml_raw
-
-    # mass and MoI as soft constraints (contribute to misfit, no hard rejection)
-    M_pred, moi_pred = compute_mass_and_moi(fort56_data, cache_eff, bml_data)
-    mass_sigma = abs(MARS_MASS_OBS - M_pred) / MARS_MASS_SIGMA
-    moi_sigma = abs(MOI_OBS - (moi_pred - MOI_BIAS)) / MOI_SIGMA
-    print(f"  mass={mass_sigma:.2f}σ  moi={moi_sigma:.2f}σ")
-
+ 
+    # ── 質量與慣量矩:同一條積分算出來的,不再事後拼接 ────────────────
+    M_pred, moi_pred = prof['M_pred'], prof['moi_pred']
+    mass_sigma = abs(MARS_MASS_OBS - M_pred)/MARS_MASS_SIGMA
+    moi_sigma  = abs(MOI_OBS - (moi_pred - MOI_BIAS))/MOI_SIGMA
+    print(f"  mass={mass_sigma:.2f}s  moi={moi_sigma:.2f}s")
+ 
     try:
-        taup_model = build_taup(fort56_data, model_name, cache_eff, bml_data=bml_data)
+        taup_model = build_taup(prof, model_name, samuel_cache)
     except Exception as e:
-        print(f"  TauP failed: {e}"); return None, None, None, None, None
-
+        print(f"  TauP failed: {e}")
+        return None, None, None, None, None
+ 
     misfit, n_data, components = compute_misfit(
-        taup_model, SAMUEL_DATA, fort56_data, bml_data=bml_data, params=params,
-        true_cmb_depth=true_cmb_depth,
-        mass_sigma=mass_sigma, moi_sigma=moi_sigma, grav_sigma=grav_sigma,
-        ric_sigma=ric_sigma)
-
-    components.update({k: bml_data.get(k) for k in BML_KEYS})
-    components['S_lit'] = float(fort56_data['S'][0])
-    components['mass_sigma']      = mass_sigma
-    components['moi_sigma']       = moi_sigma
-    components['moi_pred']        = moi_pred
-    components['M_pred']          = M_pred
-    components['T_mantle_bottom'] = T_mantle_bottom
-    components['R_ic_km']        = R_ic
-    components['ric_sigma']      = ric_sigma
-    components['rho_core_mean']  = core_prof['rho_mean']/1e3
-    components['Vp_core_cmb']    = float(core_prof['Vp'][0])
-    components['P_center_core']  = core_prof['P_center']
-    components['T_center_core']  = core_prof['T_center']
-    # 讓 run_mcmc 的 npz 能存核剖面(bml_data 只是載體,不進 json)
-    bml_data['core_depth_km'] = core_z_eos[:-1]
-    bml_data['core_Vp']       = core_prof['Vp']
-    bml_data['core_rho']      = core_prof['rho']/1e3
-    bml_data['core_T_K']      = core_prof['T']
-    bml_data['core_P_GPa']    = core_prof['P']
-    bml_data['core_R_ic_km']  = R_ic
-
-    return misfit, n_data, components, fort56_data, bml_data
-
+        taup_model, SAMUEL_DATA, prof, params=params,
+        mass_sigma=mass_sigma, moi_sigma=moi_sigma,
+        grav_sigma=grav_sigma, ric_sigma=ric_sigma)
+ 
+    components.update({
+        'Ra':              bml['Ra'],
+        'thermal_state':   bml['thermal_state'],
+        'h_solid_km':      bml['h_solid_km'],
+        'h_liquid_km':     bml['h_liquid_km'],
+        'melting':         bml['melting'],
+        'Mg_solid':        bml['Mg_solid']  if np.isfinite(bml['Mg_solid'])  else -1.0,
+        'Mg_liquid':       bml['Mg_liquid'] if np.isfinite(bml['Mg_liquid']) else -1.0,
+        'T_interface':     bml['T_interface'],
+        'P_interface':     bml['P_interface'],
+        'rho_S_interface': bml['rho_S_interface'],
+        'rho_solid_bml':   float(np.mean(prof['rho'][prof['m_bml']][
+                               prof['Vs'][prof['m_bml']] > 1e-6]))
+                           if np.any(prof['Vs'][prof['m_bml']] > 1e-6) else -1.0,
+        'rho_liquid_bml':  float(np.mean(prof['rho'][prof['m_bml']][
+                               prof['Vs'][prof['m_bml']] <= 1e-6]))
+                           if np.any(prof['Vs'][prof['m_bml']] <= 1e-6) else -1.0,
+        'upper_contrast':  upper_contrast,
+        'lower_contrast':  lower_contrast,
+        'S_lit':           prof['S_lit'],
+        'mass_sigma':      mass_sigma,
+        'moi_sigma':       moi_sigma,
+        'moi_pred':        moi_pred,
+        'M_pred':          M_pred,
+        'T_mantle_bottom': prof['T_mantle_bottom'],
+        'R_ic_km':         R_ic,
+        'gap_min':         gap,
+        'ric_sigma':       ric_sigma,
+        'rho_core_mean':   prof['rho_core_mean'],
+        'Vp_core_cmb':     prof['Vp_core_cmb'],
+        'P_center_core':   prof['P_center'],
+        'T_center_core':   prof['T_center'],
+        # 自洽場的診斷:收斂趟數與殘差。rejection 若與參數位置相關,
+        # 等於在 likelihood 裡偷偷加了不連續,必須事後檢查。
+        'P_cmb':           prof['P_cmb'],
+        'P_bml_top':       prof['P_bml_top'],
+        'z_lit_km':        prof['z_lit'],
+        'sc_n_iter':       prof['sc_n_iter'],
+        'sc_dP':           prof['sc_dP'][0],
+        'sc_dz_lit':       prof['sc_dP'][1],
+        'bml_n_pass':      bml['n_pass'],
+    })
+ 
+    return misfit, n_data, components, prof, None
 # ── MCMC ──────────────────────────────────────────────────────────────────────
 def propose(current, rng):
     # No truncation: out-of-prior proposals are counted as rejections in run_mcmc.
@@ -1562,10 +1638,9 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         if out_of_prior:
             accepted        = False
             proposed_misfit = 999.0
-            fort56_data     = None
-            bml_data        = None
+            prof = None
         else:
-            proposed_misfit, n_data, components, fort56_data, bml_data = forward(
+            proposed_misfit, n_data, components, prof, _= forward(
                 proposed, run_dir, model_name, samuel_cache)
 
             if proposed_misfit is None or proposed_misfit >= 990.0:
@@ -1581,33 +1656,20 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             current_components = components
             accept_count      += 1
 
-            if fort56_data is not None:
-                npz_dict = {k: fort56_data[k]
-                            for k in ('depth_km','Vp','Vs','rho','T_K','P_GPa')}
-                if bml_data is not None:
-                    npz_dict.update({
-                        'bml_depth_km':             bml_data['depth_km'],
-                        'bml_Vp':                   bml_data['Vp'],
-                        'bml_Vs':                   bml_data['Vs'],
-                        'bml_rho':                  bml_data['rho'],
-                        'bml_T_K':                  bml_data['T_K'],
-                        'bml_P_GPa':                bml_data['P_GPa'],
-                        'bml_phi':                  bml_data['phi'],
-                        'bml_outer_core_depth_abs': np.array([bml_data['outer_core_depth_abs']]),
-                        'bml_Ra':                   np.array([bml_data.get('Ra', 0.0)]),
-                        'bml_thermal_state':        np.array([bml_data.get('thermal_state', '')]),
-                        'bml_h_solid_km':           np.array([bml_data.get('h_solid_km', 0.0)]),
-                        'bml_h_liquid_km':          np.array([bml_data.get('h_liquid_km', 0.0)]),
-                        'bml_Mg_solid':             np.array([bml_data.get('Mg_solid', -1.0)]),
-                        'bml_Mg_liquid':            np.array([bml_data.get('Mg_liquid', -1.0)]),
-                    })
-                    for _ck in ('core_depth_km', 'core_Vp', 'core_rho',
-                                'core_T_K', 'core_P_GPa'):
-                        if _ck in bml_data:
-                            npz_dict[_ck] = bml_data[_ck]
-                    npz_dict['core_R_ic_km'] = np.array(
-                        [bml_data.get('core_R_ic_km', 0.0)])
-                np.savez(os.path.join(chain_dir, f"profile_s{step+1:05d}.npz"), **npz_dict)
+            if prof is not None:
+                np.savez(os.path.join(chain_dir, f"profile_s{step+1:05d}.npz"),
+                         z_km=prof['z_km'], layer=prof['layer'],
+                         P_GPa=prof['P_GPa'], T_K=prof['T_K'],
+                         rho=prof['rho'], Vp=prof['Vp'], Vs=prof['Vs'],
+                         g=prof['g'],
+                         z_bml_top=np.array([prof['z_bml_top']]),
+                         z_cmb=np.array([prof['z_cmb']]),
+                         h_solid_km=np.array([prof['bml']['h_solid_km']]),
+                         h_liquid_km=np.array([prof['bml']['h_liquid_km']]),
+                         Mg_solid=np.array([prof['bml']['Mg_solid']]),
+                         Mg_liquid=np.array([prof['bml']['Mg_liquid']]),
+                         thermal_state=np.array([prof['bml']['thermal_state']]),
+                         R_ic_km=np.array([current_components.get('R_ic_km', 0.0)]))
 
         elapsed     = (datetime.now() - t0).total_seconds()
         accept_rate = accept_count / (step + 1) * 100
@@ -1665,10 +1727,18 @@ if __name__ == "__main__":
     parser.add_argument('--prefix',       type=str,  default='chain')
     parser.add_argument('--random_start', action='store_true')
     parser.add_argument('--start',        type=str,  default=None)
+    parser.add_argument('--scan_R', action='store_true')
+    parser.add_argument('--route', default='B', choices=['A', 'B'],
+                        help='core EoS route: A = all-Liu (Gamma mixing), '
+                             'B = Liu Fe + Sakai FeS (Margules)')
     args = parser.parse_args()
 
     os.makedirs(MCMC_DIR, exist_ok=True)
     start_params = None
+
+    CORE_EOS_ROUTE = args.route
+    CF.configure(route=CORE_EOS_ROUTE, verbose=True)
+    START_PARAMS['R_cmb'] = {'A': 1500.0, 'B': 1650.0}[CORE_EOS_ROUTE]
 
     if args.start is not None:
         try:
@@ -1691,7 +1761,25 @@ if __name__ == "__main__":
         start_params = {k: float(rng_init.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
         print(f"random_start: {start_params}")
 
-    if args.test:
+    
+    if args.scan_R:
+        run_dir = os.path.join(MCMC_DIR, 'scan_R')
+        os.makedirs(run_dir, exist_ok=True)
+        print(f"{'R_cmb':>8}{'moi_pred':>11}{'moi_sig':>9}{'M_pred':>13}"
+              f"{'mass_sig':>10}{'P_cmb':>8}{'rho_core':>10}{'R_ic':>7}")
+        for R in np.arange(1400., 1901., 25.):
+            p = {**START_PARAMS, 'R_cmb': float(R)}
+            out = forward(p, run_dir, f'scanR{R:.0f}', _samuel_cache)
+            if out[2] is None:
+                print(f"{R:8.0f}   reject"); continue
+            c = out[2]
+            print(f"{R:8.0f}{c['moi_pred']:11.5f}"
+                  f"{abs(MOI_OBS-c['moi_pred'])/MOI_SIGMA:9.2f}"
+                  f"{c['M_pred']:13.4e}"
+                  f"{abs(MARS_MASS_OBS-c['M_pred'])/MARS_MASS_SIGMA:10.2f}"
+                  f"{float(c['P_cmb']):8.2f}"
+                  f"{c['rho_core_mean']:10.3f}{c['R_ic_km']:7.0f}")
+    elif args.test:
         run_mcmc(0, 1, prefix=args.prefix, start_params=start_params)
     else:
         run_mcmc(args.chain, args.steps, prefix=args.prefix, start_params=start_params)

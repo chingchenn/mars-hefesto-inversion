@@ -898,24 +898,53 @@ def compute_oxygen(p):
             1.5*p['Al'] + 0.5*p['Na'] + 1.5*p['Cr'])
 
 # ── nGibbs helpers ────────────────────────────────────────────────────────────
-def _ng_props(component_moles, P, T, names):
-    PT = np.stack([np.asarray(P, dtype=np.float64),
-                   np.asarray(T, dtype=np.float64)], axis=1)
-    return EM.get_property_hefesto_vectorized_from_assemblage(
-        torch.tensor(np.asarray(component_moles), dtype=torch.float64),
-        torch.tensor(PT, dtype=torch.float64),
-        property_names=names,
-    )
-
+class _NGFail(Exception):
+    # nGibbs 輸入非有限/界外,或 polish_masses 內部發散 → 外層 reject 該樣本
+    pass
 
 def _ng_forward(P, T_or_S, comp_values, headers, outputs):
     x = np.zeros((len(P), 2 + len(comp_values)), dtype=np.float32)
     x[:, 0]  = P
     x[:, 1]  = T_or_S
     x[:, 2:] = comp_values
+    # 負莫耳數會讓 polish_masses 的 componentAtomMoles 發散成 NaN,
+    # pinv 再丟 _LinAlgError 殺掉整個 process
+    if not np.all(np.isfinite(x)):
+        raise _NGFail(f"nonfinite input: P={P[:3]} T_or_S={T_or_S[:3]} comp={comp_values}")
+    if np.any(x[:, 2:] < 0.0):
+        raise _NGFail(f"negative moles: comp={comp_values}")
     with torch.no_grad():
-        return EM.ForwardMB(x, headers=headers, outputs=outputs)
-
+        try:
+            return EM.ForwardMB(x, headers=headers, outputs=outputs)
+        except torch._C._LinAlgError as exc:
+            raise _NGFail(f"polish_masses diverged: P={P[:3]} T_or_S={T_or_S[:3]} "
+                          f"comp={comp_values}") from exc
+def _ng_props(component_moles, P, T, names):
+    cm = np.asarray(component_moles.detach().cpu() if torch.is_tensor(component_moles)
+                    else component_moles, dtype=np.float64)
+    Pa = np.asarray(P, dtype=np.float64)
+    Ta = np.asarray(T, dtype=np.float64)
+    # pinv(componentAtomMoles) 在含 NaN 時會丟 _LinAlgError 並殺掉整個 process,
+    # 所以必須在進 torch 之前攔下來
+    if not (np.all(np.isfinite(cm)) and np.all(np.isfinite(Pa)) and np.all(np.isfinite(Ta))):
+        raise _NGFail(f"nonfinite: cm={np.sum(~np.isfinite(cm))} "
+                      f"P=[{np.nanmin(Pa):.3f},{np.nanmax(Pa):.3f}] "
+                      f"T=[{np.nanmin(Ta):.1f},{np.nanmax(Ta):.1f}]")
+    PT = np.stack([Pa, Ta], axis=1)
+    out = EM.get_property_hefesto_vectorized_from_assemblage(
+        torch.tensor(cm, dtype=torch.float64),
+        torch.tensor(PT, dtype=torch.float64),
+        property_names=names,
+    )
+    # nGibbs 在界外條件下由 dos_tables/therm_props 產生 NaN 而不報錯;
+    # 帶 NaN 的 Vp/Vs/rho 進 TauP 會讓 slowness 溢位並寫壞 heap(malloc/munmap),
+    # 那是 SIGABRT,Python 的 try/except 攔不到
+    for k in names:
+        v = out[k]
+        v = np.asarray(v.detach().cpu() if torch.is_tensor(v) else v, dtype=np.float64)
+        if not np.all(np.isfinite(v)):
+            raise _NGFail(f"nGibbs output {k}: {np.sum(~np.isfinite(v))}/{v.size} nonfinite")
+    return out
 
 def _comp_values(p, O):
     return [p['Si'], p['Mg'], p['Fe'], p['Ca'],
@@ -923,6 +952,9 @@ def _comp_values(p, O):
 
 
 def rho_solid_ngibbs(XS, P_GPa, T_K):
+    if not (np.isfinite(XS) and 0.0 <= XS <= 1.0
+            and np.isfinite(P_GPa) and P_GPa > 0.0 and np.isfinite(T_K) and T_K > 0.0):
+        raise _NGFail(f"rho_solid_ngibbs bad args: XS={XS} P={P_GPa} T={T_K}")
     # Solid BML density at the interface, g/cm3. Replaces the frozen _RHO_S_CONST
     # in mole_to_volume_fraction and in Ra.
     p   = composition_from_params({'Mg#': XS, 'T_lit': T_K, 'P_lit': P_GPa})
@@ -1008,10 +1040,16 @@ def sc_bml(params, z_bml, P_bml_init, g_bml, T_mantle_bottom, n_pass=3):
                   f"Mg_bulk={Mg_bulk:.3f} T_core={T_core:.0f} D={D:.0f}")
             return None
         _, pd, T_int, P_int, rho_L_int = st
- 
+        
         # ── 中層:rho_S 自洽 ────────────────────────────────────────────────
-        if pd['melting'] and 1.0 <= h_solid < D - 1e-9:
-            rho_new = rho_solid_ngibbs(pd['XS'], P_int, T_int)
+        # brentq(xtol=0.5) 求得的 h_solid 與重算的 pd 在全熔邊界上可能不一致:
+        # h_solid >= 1.0 但 pd 落在 f_solid < 1e-3 那一支,XS 為 nan
+        if pd['melting'] and np.isfinite(pd['XS']) and 1.0 <= h_solid < D - 1e-9:
+            try:
+                rho_new = rho_solid_ngibbs(pd['XS'], P_int, T_int)
+            except _NGFail as exc:
+                raise _NGFail(f"{exc} | h_solid={h_solid:.2f} f_solid={pd['f_solid']:.5f} "
+                              f"phase={pd['phase']} melting={pd['melting']}") from exc
             if not np.isfinite(rho_new) or rho_new <= 0:
                 return None
             rho_S = rho_new
@@ -1264,6 +1302,12 @@ def build_taup(prof, model_name, samuel_cache):
         return TauPyModel(model=npz_path)
  
     z, Vp, Vs, rho = prof['z_km'], prof['Vp'], prof['Vs'], prof['rho']
+    if not (np.all(np.isfinite(z)) and np.all(np.isfinite(Vp))
+            and np.all(np.isfinite(Vs)) and np.all(np.isfinite(rho))
+            and np.all(Vp > 0) and np.all(rho > 0) and np.all(Vs >= 0)):
+        raise _NGFail(f"taup input nonfinite/nonpositive: "
+                      f"Vp={np.sum(~np.isfinite(Vp))} Vs={np.sum(~np.isfinite(Vs))} "
+                      f"rho={np.sum(~np.isfinite(rho))} Vp_min={np.nanmin(Vp):.3f}")
     m_man, m_bml, m_cor = prof['m_mantle'], prof['m_bml'], prof['m_core']
     z_cmb = prof['z_cmb']
  
@@ -1312,11 +1356,11 @@ def build_taup(prof, model_name, samuel_cache):
             f.write(f"{d:.3f}  {vp:.4f}  {vs:.4f}  {r:.4f}\n")
 
         if i0 < len(d_b):
+            # i0 == 0(BML 全液):地函段最後一點已經是 z_bml_top，那就是界面上側，
+            # 這裡再寫一次會讓同一深度出現三次 -> nd has depth repeated >2x
             if i0 > 0:
                 vp_s, vs_s, rho_s = vp_b[i0-1], vs_b[i0-1], rho_b[i0-1]
-            else:
-                vp_s, vs_s, rho_s = Vp[m_man][-1], Vs[m_man][-1], rho[m_man][-1]
-            f.write(f"{d_b[i0]:.3f}  {vp_s:.4f}  {vs_s:.4f}  {rho_s:.4f}\n")
+                f.write(f"{d_b[i0]:.3f}  {vp_s:.4f}  {vs_s:.4f}  {rho_s:.4f}\n")
             f.write("outer-core\n")
             for d, vp, r in zip(d_b[i0:], vp_b[i0:], rho_b[i0:]):
                 f.write(f"{d:.3f}  {vp:.4f}  0.0000  {r:.4f}\n")
@@ -1457,6 +1501,16 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
 
 # ── forward model ─────────────────────────────────────────────────────────────
 def forward(params, run_dir, model_name, samuel_cache):
+    try:
+        return _forward_impl(params, run_dir, model_name, samuel_cache)
+    except (_NGFail, _PDFail, torch._C._LinAlgError) as exc:
+        print(f"  [NGFAIL] {exc}  R_cmb={params['R_cmb']:.1f} T_lit={params['T_lit']:.1f} "
+              f"P_lit={params['P_lit']:.3f} Mg#={params['Mg#']:.4f} "
+              f"T_core={params['T_core']:.1f} Mg#bml={params['Mg#_bulk_bml']:.4f} "
+              f"D={params['BML_thickness']:.1f} w_S={params['w_S']:.4f}", flush=True)
+        return None, None, None, None, None
+
+def _forward_impl(params, run_dir, model_name, samuel_cache):
     """a36:一條自洽剖面決定一切。
  
     回傳 (misfit, n_data, components, prof, None)
@@ -1577,7 +1631,6 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
 
     samuel_cache = _samuel_cache
 
-    rng     = np.random.default_rng(42 + chain_id)
     current = (start_params or START_PARAMS).copy()
 
     chain_file = os.path.join(chain_dir, "chain.jsonl")
@@ -1597,6 +1650,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             print(f"Chain {chain_id}: resuming from step {len(chain)}")
 
     step_start = len(chain)
+    rng = np.random.default_rng(42 + chain_id + 100003*step_start)   # resume 後換流,避免增量序列重播
     accept_count = 0
     current_components = {k: None for k in CHAIN_KEYS}          # 佔位
 

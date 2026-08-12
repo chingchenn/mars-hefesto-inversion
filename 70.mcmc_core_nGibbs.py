@@ -1650,7 +1650,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             print(f"Chain {chain_id}: resuming from step {len(chain)}")
 
     step_start = len(chain)
-    rng = np.random.default_rng(42 + chain_id + 100003*step_start)   # resume 後換流,避免增量序列重播
+    rng = np.random.default_rng([42, chain_id, step_start, os.getpid()])  
     accept_count = 0
     current_components = {k: None for k in CHAIN_KEYS}          # 佔位
 

@@ -156,6 +156,18 @@ CHAIN_KEYS = (
     'sc_n_iter', 'sc_dP', 'sc_dz_lit', 'bml_n_pass',
 )
 
+PROP_SCALE  = 2.38**2 / 8.0
+PARAM_ORDER = ('T_lit', 'P_lit', 'Mg#', 'T_core',
+               'Mg#_bulk_bml', 'BML_thickness', 'w_S', 'R_cmb')
+
+def _load_prop_chol(route):
+    path = f'prop_cov_a37{route}.npz'
+    if not os.path.exists(path):
+        return None
+    d = np.load(path)
+    assert tuple(d['param_order']) == PARAM_ORDER
+    print(f"proposal: cov loaded from {path}", flush=True)
+    return np.linalg.cholesky(PROP_SCALE * d['cov'])
 
 # ── Samuel 2023 paths ─────────────────────────────────────────────────────────
 SAMUEL_DATA_DIR = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
@@ -1619,11 +1631,10 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
     return misfit, n_data, components, prof, None
 # ── MCMC ──────────────────────────────────────────────────────────────────────
 def propose(current, rng):
-    # No truncation: out-of-prior proposals are counted as rejections in run_mcmc.
-    # resample-until-in-bounds would be an unnormalised truncated Gaussian,
-    # q(x'|x) != q(x|x'), breaking detailed balance near the walls.
-    return {k: current[k] + rng.normal(0, STEP[k]) for k in PRIOR}
-
+    if _PROP_CHOL is None:
+        return {k: current[k] + rng.normal(0, STEP[k]) for k in PRIOR}
+    dx = _PROP_CHOL @ rng.standard_normal(len(PARAM_ORDER))
+    return {k: current[k] + dx[i] for i, k in enumerate(PARAM_ORDER)}
 
 def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     chain_dir = os.path.join(MCMC_DIR, f"{prefix}_{chain_id:02d}")
@@ -1815,6 +1826,7 @@ if __name__ == "__main__":
         start_params = {k: float(rng_init.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
         print(f"random_start: {start_params}")
 
+    _PROP_CHOL = _load_prop_chol(args.route)
     
     if args.scan_R:
         run_dir = os.path.join(MCMC_DIR, 'scan_R')

@@ -50,17 +50,34 @@ NG_S_MAX     = 2.90
 
 
 # ── travel-time misfit scale ──────────────────────────────────────────────────
-# Ordering must be strict:  good fit  <  worst present phase (RES_CAP)
-#                                     <  phase the model cannot predict (MISS_PENALTY)
-# a32 violated this (missing = 5.0 while present residuals were unbounded to 43 sigma),
-# which made dropping hard phases profitable and created an absorbing state at
-# P_lit ~ 2.5 GPa.  Keep the inequalities whenever these numbers are touched.
-RES_CAP       = 10.0    # sigma; covers the genuine 6.5 sigma ScS-S residuals,
-                        # still crushes TauP branch-jumps (2662 s = 333 sigma)
-MISS_PENALTY  = 12.0    # must be > RES_CAP
-EVENT_FAIL    = 20.0    # must be > MISS_PENALTY (whole event lost, e.g. TauP raised)
+# a42: 累加方式由「事件內平均後相加」改為「逐筆相加」,與 Drilleau et al. 2024
+# Eq. S3.2 (S = Sum_i^161 |t_obs - t_cal|/sigma_ti) 及 Samuel 2023 一致。
+# 事件平均隱含「同一事件內各相位完全相關」的保守假設,而 sigma 已經逐筆反映
+# 品質差異(見 TT_DATA 說明),不需要第二層平均。
+#
+# 序必須嚴格:  好的擬合  <  最差的存在相位 (RES_CAP)
+#                        <  模型算不出的相位 (MISS_PENALTY)
+#                        <  整個事件失去 (MISS_PENALTY_PER_PH)
+# a32 違反過這個序(missing = 5.0 而存在相位的殘差可到 43 sigma),使得「丟掉
+# 難擬合的相位」變成划算,並在 P_lit ~ 2.5 GPa 造出吸收態。
+#
+# 拿掉 /ev_n 之後 EVENT_FAIL 這個「每事件常數」失效:一個 8 相位事件正常擬合
+# 付 ~8,全 miss 付 8 x 12 = 96,常數 20 會讓「丟掉整個事件」變成划算。
+# 改為按該事件的相位數縮放。
+# TauP 在三分區邊緣會讓小弧分支消失,「首達」silently 回傳大弧/多繞行分支。
+# 92 的實測: Khan 地殼下 S0918a SS-S 殘差 716 sigma (= 4085 s),
+# S0474a SSS-S 438 sigma,且數值跨五個 ensemble 成員幾乎不變(438.9/438.7/
+# 438.6/438.6/438.5)—— 同一個錯誤分支,不是擬合差。
+# sigma 是 5-20 s,真實走時誤差不可能到 300 s,所以 300 s 是安全的判準:
+# Samuel 地殼下命中 0 筆(最大殘差 < 10 sigma ~ 100 s)。
+# 當作 miss 處理而非 cap: 模型確實沒給出該相位的正確分支。
+BRANCH_JUMP_S = 300.0
+RES_CAP             = 10.0   # sigma
+MISS_PENALTY        = 12.0   # 每個算不出的相位;必須 > RES_CAP
+MISS_PENALTY_PER_PH = 20.0   # 每個相位,整個事件 TauP 丟例外時;必須 > MISS_PENALTY
 SOLIDUS_SIGMA = 12.0    # K, temperature scale for ~1% melt fraction
 SOLIDUS_CAP   = 25.0    # corresponds to 60 K excess
+START_MISFIT_MAX = 3000.0
 
 # per-proposal S_lit log (includes proposals rejected for being out of range)
 _NG_S_LOG = {'last': np.nan, 'last_in_range': True, 'all': [], 'n_below': 0, 'n_above': 0}
@@ -70,22 +87,43 @@ MARS_RADIUS      = 3389.5
 MARS_RADIUS_M    = MARS_RADIUS * 1000
 T_SURF           = 220.0
 MARS_MASS_OBS    = 6.4171e23
-MARS_MASS_SIGMA  = MARS_MASS_OBS * 0.01
-MOI_OBS          = 0.36379   # Bagheri 2019 / Konopliv 2016, C/MR^2 with
-                             # R = mean radius 3389.5 km (Samuel 2021/2023 framework).
-                             # Drilleau 2026 uses Konopliv 2020 = 0.3634 +- 0.00006,
-                             # 1 sigma away and in the opposite direction -> discussion
-                             # sensitivity, not the baseline.
-MOI_SIGMA        = 0.0005
-MOI_BIAS         = 0.0  # pipeline systematic: pure-Samuel PanelJ through this
-                             # integrator gives MoI=0.36515 vs obs 0.36379 (budget test)
+MARS_MASS_OBS    = 6.4171e23
+MARS_MASS_SIGMA  = MARS_MASS_OBS * 3.05e-4
+                            # 0.0305 % = mean density 3935 +- 1.2 kg/m3
+                             #   (Rivoldini 2011; 同 Bagheri 2019, Khan 2023,
+                             #    Irving 2023, Bi 2025, Samuel 2023)
+                             #  0.263 % = sqrt(0.031^2 + 0.032^2 + 0.259^2)
+                             #   0.031 % mean density 3935 +- 1.2 kg/m3
+                             #           (Rivoldini 2011; used by Khan 2023,
+                             #            Irving 2023, Bi 2025)
+                             #   0.032 % nGibbs vs HeFESTo, 2-19 GPa, same
+                             #           composition and P-T (this work)
+                             #   0.259 % fixed 0-100 km column: measured
+                             #           forward sensitivity to swapping the
+                             #           borrowed crust (Samuel 2023, 68 km /
+                             #           3025 kg m-3) for Kim et al. 2023
+                             #           (48 km / 2650 kg m-3)
+MOI_OBS          = 0.3634    # Konopliv 2020; same value as Khan 2023,
+                             # Irving 2023, Bi 2025, Drilleau 2026.
+                             # Supersedes 0.36379 (Konopliv 2016 / Bagheri
+                             # 2019) used in a31-a38.
+MOI_SIGMA        = 6.0e-5    # Konopliv 2020 
+# a43: 地測項權重。TT 以 160 筆逐筆相加,基線 ~95;質量與 MoI 各 1 筆,
+# 即使偏離 20 sigma 在 total 中仍只是小擾動,無法把鏈拉回質量正確的區域
+# (a43 前 950 步:11 條鏈只有 1 條 mass < 1 sigma)。
+# 質量權重高於 MoI:質量是行星尺度的積分約束,由 GM 直接量測且不依賴自轉
+# 動力學;MoI 除觀測外還需 Chandler wobble 的解釋,且對地殼細節更敏感。
+# 這是明說的建模選擇,不是 sigma 的推導 —— 見 §4.3 敏感度測試。
+W_MASS = 1.0
+W_MOI  = 1.0
+MOI_BIAS         = 0.0
 MCMC_TEMPERATURE = 1.0
 
 SC_N_FIXED  = 40      # 節點數
 SC_Z_FIXED  = 100.0   # km,外借區段底部
 SC_N_MAN   = 250       # 地函節點
 SC_N_BML   = 40        # BML 節點
-SC_N_CORE  = 60        # 核節點
+SC_N_CORE  = 60        # 核節點s
 SC_N_ITER  = 8         # 鬆弛上限
 SC_TOL_P   = 0.01      # GPa,收斂判準 max|P_new - P_old|
 SC_G_GRAV  = 6.674e-11
@@ -109,17 +147,9 @@ START_PARAMS = {
 'Mg#_bulk_bml': 0.62, # bulk BML composition (Samuel ~Fe-rich)
 'BML_thickness': 168.7,
 'w_S': 0.17,     # core S weight fraction (Fe-S binary, effective light element)
-'R_cmb':1650, #km 
+'R_cmb':1500, #km 
 }
 
-# a34 prior widening (a33 pressed three walls):
-#   T_core       3200 -> 3600   Drilleau 2026 BML Tc = 3437 +- 201 / 3497 +- 272 K
-#                               sat entirely outside the old wall
-#   Mg#          0.86 -> 0.90   a33 posterior 95% upper 0.846, only 0.014 from the wall
-#                               while MoI keeps pushing it up
-#   Mg#_bulk_bml 0.30 -> 0.20   Ohtani 1979 Fe2SiO4 melting relations support it
-# NOTE: changing the Mg#_bulk_bml axis INVALIDATES bml_phase_table_prior_*.npz.
-#       Rebuild the table before any prior scan or Bayes factor.
 PRIOR = {
 'T_lit': (1000.0, 2600.0),
 'P_lit': (1.4, 9.0),
@@ -127,20 +157,19 @@ PRIOR = {
 'T_core': (1550.0, 3600.0),   # a26: lower 1800->1550, ICB 溫度計臨界溫度在 1700-1820 K
 'Mg#_bulk_bml': (0.20, 0.80),
 'BML_thickness': (0.0, 400.0),
-'w_S': (0.05, 0.30),          # 化學計量上限 0.365; 地球化學上限 ~0.17 不設進 prior,
-                           # 讓 posterior 與 17 wt% 的關係成為結果
+'w_S': (0.05, 0.40),          # 化學計量上限 0.365; 地球化學上限 ~0.17 不設進 prior,
 'R_cmb': (1400, 1900),
 }  
 
 STEP = {
-'T_lit': 50.0,
-'P_lit': 0.7,
-'Mg#': 0.025,
-'T_core': 100.0,
-'Mg#_bulk_bml': 0.06,
-'BML_thickness': 25.0,
-'w_S': 0.02,
-'R_cmb':25.0,
+'T_lit': 5.0,
+'P_lit': 0.05,
+'Mg#': 0.0024,
+'T_core': 12.0,
+'Mg#_bulk_bml': 0.015,
+'BML_thickness': 12.0,
+'w_S': 0.0025,
+'R_cmb': 4.0,
 }
 
 CHAIN_KEYS = (
@@ -149,25 +178,14 @@ CHAIN_KEYS = (
     'h_solid_km', 'h_liquid_km', 'melting', 'Mg_solid', 'Mg_liquid',
     'rho_solid_bml', 'rho_liquid_bml',  'P_interface',
     'T_mantle_bottom', 'T_interface', 'S_lit', 'tt_n_ev', 'tt_n_ph', 'tt_n_miss',
-    'tt_n_capped', 'tt_miss_by_event',
+    'tt_n_capped', 'tt_n_branch', 'tt_miss_by_event',
     'R_ic_km', 'ric_sigma', 'rho_core_mean', 'Vp_core_cmb',
     'P_center_core', 'T_center_core',
     'gap_min', 'P_cmb', 'P_bml_top', 'z_lit_km',
     'sc_n_iter', 'sc_dP', 'sc_dz_lit', 'bml_n_pass',
+    'tt_per_datum', 'geo_sum', 'misfit_reduced', 'n_data',
 )
 
-PROP_SCALE  = 2.38**2 / 8.0
-PARAM_ORDER = ('T_lit', 'P_lit', 'Mg#', 'T_core',
-               'Mg#_bulk_bml', 'BML_thickness', 'w_S', 'R_cmb')
-
-def _load_prop_chol(route):
-    path = f'prop_cov_a37{route}.npz'
-    if not os.path.exists(path):
-        return None
-    d = np.load(path)
-    assert tuple(d['param_order']) == PARAM_ORDER
-    print(f"proposal: cov loaded from {path}", flush=True)
-    return np.linalg.cholesky(PROP_SCALE * d['cov'])
 
 # ── Samuel 2023 paths ─────────────────────────────────────────────────────────
 SAMUEL_DATA_DIR = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
@@ -183,117 +201,264 @@ SAMUEL_FIG1K_DIR = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
                     "METADATA_BML/DATA_FIG1/PANEL_K")
 
 # ── seismic data ──────────────────────────────────────────────────────────────
-SAMUEL_DATA = {
+TT_DATA = {
     'S0154a': {
-        'delta': 29.7,  'depth': 17.4,
-        'SS-S':  (25.3, 5.0),
-        'SSS-S': (35.0, 8.0),
+        'delta': 29.9, 'depth': 60.6,
+        'S-P':     (174.4, 13.0),
+        'SS-S':    (25.3, 5.4),
+        'SSS-S':   (35.0, 8.9),
     },
     'S0173a': {
-        'delta': 30.9,  'depth': 28.4,
-        'S-P':   (178.8,  5.0),
-        'sP-P':  (9.43,   5.0),
-        'PP-P':  (19.9,   8.0),
-        'PPP-P': (34.4,  12.0),
-        'sS-S':  (13.2,   5.0),
-        'SS-S':  (24.4,   5.0),
-        'SSS-S': (40.5,   8.0),
-        'ScS-S': (345.2, 12.0),
+        'delta': 30.2, 'depth': 41.7,
+        'S-P':     (178.8, 10.1),
+        'sP-P':    (9.43, 6.6),
+        'PP-P':    (19.9, 8.1),
+        'PPP-P':   (34.4, 12.0),
+        'sS-S':    (13.2, 6.5),
+        'SS-S':    (24.4, 5.1),
+        'SSS-S':   (40.5, 8.9),
+        'ScS-S':   (345.2, 17.9),
     },
     'S0185a': {
-        'delta': 54.8,  'depth': 17.4,
-        'S-P':   (327.28,  5.0),
-        'pP-P':  (4.0,     5.0),
-        'PP-P':  (22.47,   8.0),
-        'PPP-P': (49.3,   12.0),
-        'sS-S':  (10.0,    5.0),
-        'SS-S':  (30.9,    5.0),
-        'SSS-S': (55.4,    8.0),
-        'ScS-S': (152.3,  12.0),
+        'delta': 54.7, 'depth': 12.5,
+        'S-P':     (327.28, 25.4),
+        'pP-P':    (4.0, 4.3),
+        'PP-P':    (22.47, 8.1),
+        'PPP-P':   (49.3, 12.0),
+        'sS-S':    (10.0, 9.6),
+        'SS-S':    (30.9, 5.4),
+        'SSS-S':   (55.4, 8.3),
+        'ScS-S':   (152.3, 50.5),
     },
     'S0235b': {
-        'delta': 30.5,  'depth': 26.1,
-        'S-P':   (171.4,  5.0),
-        'PP-P':  (18.6,   8.0),
-        'PPP-P': (32.0,  12.0),
-        'sS-S':  (9.2,    5.0),
-        'SS-S':  (23.2,   5.0),
-        'SSS-S': (33.3,   8.0),
-        'ScS-S': (343.9, 12.0),
+        'delta': 29.2, 'depth': 21.5,
+        'S-P':     (171.4, 10.1),
+        'PP-P':    (18.6, 8.0),
+        'PPP-P':   (32.0, 12.0),
+        'sS-S':    (9.2, 6.9),
+        'SS-S':    (23.2, 5.7),
+        'SSS-S':   (33.3, 8.9),
+        'ScS-S':   (343.9, 17.7),
     },
     'S0325a': {
-        'delta': 42.0,  'depth': 33.8,
-        'S-P':   (229.3,  5.0),
-        'pP-P':  (9.8,    5.0),
-        'PP-P':  (21.1,   8.0),
-        'PPP-P': (34.4,  12.0),
-        'sS-S':  (13.8,   5.0),
-        'SS-S':  (26.1,   5.0),
-        'SSS-S': (50.3,   8.0),
-        'ScS-S': (220.4, 12.0),
+        'delta': 41.5, 'depth': 44.4,
+        'S-P':     (229.3, 11.9),
+        'pP-P':    (9.8, 3.5),
+        'PP-P':    (21.1, 8.1),
+        'PPP-P':   (34.4, 12.0),
+        'sS-S':    (13.8, 5.9),
+        'SS-S':    (26.1, 5.7),
+        'SSS-S':   (50.3, 8.0),
+        'ScS-S':   (220.4, 40.0),
     },
     'S0407a': {
-        'delta': 29.1,  'depth': 31.3,
-        'S-P':   (170.7,  5.0),
-        'pP-P':  (6.77,   5.0),
-        'PP-P':  (23.38,  8.0),
-        'sS-S':  (13.3,   5.0),
-        'SS-S':  (21.1,   5.0),
-        'SSS-S': (33.1,   8.0),
-        'ScS-S': (370.0, 12.0),
+        'delta': 27.9, 'depth': 33.7,
+        'S-P':     (170.7, 9.9),
+        'pP-P':    (6.77, 3.6),
+        'PP-P':    (23.38, 8.9),
+        'sS-S':    (13.3, 5.9),
+        'SS-S':    (21.1, 5.5),
+        'SSS-S':   (33.1, 8.9),
+        'ScS-S':   (370.0, 24.4),
     },
     'S0409d': {
-        'delta': 30.6,  'depth': 26.1,
-        'S-P':   (163.2,  5.0),
-        'pP-P':  (8.3,    5.0),
-        'PP-P':  (27.6,   8.0),
-        'PPP-P': (36.94, 12.0),
-        'sS-S':  (8.4,    5.0),
-        'SS-S':  (20.9,   5.0),
-        'SSS-S': (39.8,   8.0),
-        'ScS-S': (320.1, 12.0),
+        'delta': 30.3, 'depth': 24.0,
+        'S-P':     (163.2, 12.8),
+        'pP-P':    (8.3, 3.6),
+        'PP-P':    (27.6, 8.1),
+        'PPP-P':   (36.94, 12.0),
+        'sS-S':    (8.4, 6.0),
+        'SS-S':    (20.9, 5.1),
+        'SSS-S':   (39.8, 8.9),
+        'ScS-S':   (320.1, 26.9),
     },
     'S0474a': {
-        'delta': 20.7,  'depth': 30.7,
-        'S-P':   (121.6,  5.0),
-        'PP-P':  (13.4,   8.0),
-        'sS-S':  (9.7,    5.0),
-        'SS-S':  (16.9,   5.0),
-        'SSS-S': (25.8,   8.0),
-        'ScS-S': (455.0, 12.0),
+        'delta': 19.7, 'depth': 55.9,
+        'S-P':     (121.6, 14.4),
+        'PP-P':    (13.4, 8.1),
+        'PPP-P':   (24.8, 12.1),
+        'SS-S':    (15.8, 5.4),
+        'SSS-S':   (32.4, 9.2),
     },
     'S0484b': {
-        'delta': 26.0,  'depth': 30.1,
-        'S-P':   (151.0,  5.0),
-        'PP-P':  (16.0,   8.0),
-        'PPP-P': (29.4,  12.0),
-        'sS-S':  (11.6,   5.0),
-        'SS-S':  (19.6,   5.0),
-        'SSS-S': (33.4,   8.0),
-        'ScS-S': (360.0, 12.0),
+        'delta': 30.9, 'depth': 45.0,
+        'S-P':     (173.1, 9.1),
+        'pP-P':    (5.5, 4.0),
+        'PP-P':    (19.73, 8.1),
+        'sS-S':    (13.0, 6.5),
+        'SS-S':    (17.4, 8.2),
+        'ScS-S':   (322.3, 23.9),
+    },
+    'S0784a': {
+        'delta': 30.6, 'depth': 18.7,
+        'S-P':     (179.3, 12.2),
+        'pP-P':    (6.5, 3.8),
+        'PP-P':    (13.7, 8.1),
+        'PPP-P':   (22.4, 13.0),
+        'sS-S':    (7.2, 6.3),
+        'SS-S':    (19.6, 5.9),
+        'SSS-S':   (28.0, 16.8),
+    },
+    'S0802a': {
+        'delta': 27.9, 'depth': 17.0,
+        'S-P':     (180.3, 13.5),
+        'pP-P':    (4.0, 3.9),
+        'PP-P':    (25.6, 9.9),
+        'PPP-P':   (33.9, 12.1),
+        'sS-S':    (9.3, 6.5),
+        'SS-S':    (22.4, 5.4),
+        'SSS-S':   (36.5, 10.5),
+        'ScS-S':   (387.6, 28.3),
+    },
+    'S0809a': {
+        'delta': 29.4, 'depth': 20.0,
+        'S-P':     (191.95, 19.8),
+        'pP-P':    (4.5, 4.0),
+        'PP-P':    (16.25, 8.0),
+        'PPP-P':   (29.65, 12.0),
+        'sS-S':    (8.1, 6.8),
+        'SS-S':    (23.8, 5.1),
+        'SSS-S':   (39.3, 9.0),
+        'ScS-S':   (373.5, 31.3),
     },
     'S0820a': {
-        'delta': 75.2,  'depth': 26.1,
-        'S-P':   (437.5,  5.0),
-        'SS-S':  (48.4,   5.0),
-        'SSS-S': (82.3,   8.0),
-        'SS-PP': (22.6,  10.0),
+        'delta': 29.4, 'depth': 18.6,
+        'S-P':     (174.1, 13.4),
+        'PP-P':    (21.9, 9.1),
+        'PPP-P':   (32.1, 12.0),
+        'sS-S':    (8.5, 6.1),
+    },
+    'S0861a': {
+        'delta': 55.1, 'depth': 38.5,
+        'S-P':     (319.3, 17.3),
+        'PP-P':    (19.6, 8.2),
+        'PPP-P':   (47.6, 12.1),
+        'SS-S':    (41.1, 5.4),
+    },
+    'S0864a': {
+        'delta': 29.5, 'depth': 38.3,
+        'S-P':     (171.4, 17.9),
+        'PP-P':    (18.0, 8.0),
+        'PPP-P':   (27.9, 12.0),
+        'sS-S':    (17.3, 7.4),
+        'SS-S':    (26.4, 5.1),
+    },
+    'S0916d': {
+        'delta': 29.4, 'depth': 30.8,
+        'S-P':     (170.8, 9.4),
+        'pP-P':    (3.9, 4.6),
+        'PP-P':    (19.3, 8.1),
+        'PPP-P':   (36.1, 12.0),
+        'SS-S':    (19.0, 5.4),
+        'SSS-S':   (42.9, 8.9),
+        'ScS-S':   (342.8, 23.4),
+    },
+    'S0918a': {
+        'delta': 16.8, 'depth': 56.5,
+        'S-P':     (102.4, 13.0),
+        'PP-P':    (12.8, 8.2),
+        'PPP-P':   (22.5, 12.1),
+        'SS-S':    (21.2, 5.7),
+        'SSS-S':   (35.0, 9.1),
+    },
+    'S0976a': {
+        'delta': 143.6, 'depth': 52.5,
+        'SS-PP':   (854.4, 19.3),
     },
     'S1000a': {
-        'delta': 87.0,  'depth': 27.0,
-        'S-P':         (490.4,   5.0),
-        'SS-S':        (54.9,    5.0),
-        'SSS-S':       (93.3,    8.0),
-        'SKS-PP':      (87.0,   10.0),
-        'PP-PbdiffPcP': (22.5,  10.0),
+        'delta': 126.09, 'depth': 0.0,
+        'SS-PP':   (749.0, 10.8),
+        'SKS-PP':  (339.3, 10.8),
+    },
+    'S1012d': {
+        'delta': 37.6, 'depth': 15.6,
+        'S-P':     (221.7, 11.6),
+        'pP-P':    (6.7, 3.5),
+        'PP-P':    (18.0, 8.1),
+        'PPP-P':   (27.7, 12.0),
+        'sS-S':    (11.0, 5.8),
+        'SS-S':    (24.5, 5.4),
+        'SSS-S':   (40.65, 8.9),
+    },
+    'S1015f': {
+        'delta': 30.1, 'depth': 26.1,
+        'S-P':     (177.7, 12.5),
+        'PP-P':    (20.47, 8.1),
+        'PPP-P':   (35.37, 12.0),
+        'sS-S':    (11.2, 6.2),
+    },
+    'S1022a': {
+        'delta': 29.4, 'depth': 21.3,
+        'S-P':     (177.0, 13.4),
+        'pP-P':    (9.0, 3.5),
+        'PP-P':    (19.3, 8.1),
+        'PPP-P':   (27.5, 12.0),
+        'sS-S':    (11.0, 5.9),
+        'SS-S':    (25.0, 5.1),
+        'SSS-S':   (55.0, 8.9),
+    },
+    'S1039b': {
+        'delta': 30.1, 'depth': 38.1,
+        'S-P':     (176.1, 15.9),
+        'pP-P':    (7.8, 3.8),
+        'PP-P':    (12.3, 8.1),
+        'PPP-P':   (28.7, 12.0),
+        'SS-S':    (14.9, 5.4),
+    },
+    'S1048d': {
+        'delta': 30.8, 'depth': 35.1,
+        'S-P':     (179.19, 10.6),
+        'pP-P':    (7.49, 3.7),
+        'PP-P':    (18.05, 8.1),
+        'SS-S':    (24.3, 5.4),
+    },
+    'S1094b': {
+        'delta': 58.5, 'depth': 0.0,
+        'S-P':     (343.0, 5.5),
+    },
+    'S1102a': {
+        'delta': 75.7, 'depth': 57.1,
+        'S-P':     (443.7, 15.7),
+    },
+    'S1133c': {
+        'delta': 29.5, 'depth': 18.3,
+        'S-P':     (175.3, 12.4),
+        'pP-P':    (5.8, 3.4),
+        'PP-P':    (16.7, 8.1),
+        'PPP-P':   (28.46, 12.0),
+        'sS-S':    (9.1, 5.7),
+        'SS-S':    (17.4, 5.9),
+        'SSS-S':   (35.4, 8.9),
+    },
+    'S1153a': {
+        'delta': 82.2, 'depth': 95.9,
+        'S-P':     (467.95, 11.5),
+    },
+    'S1157a': {
+        'delta': 36.9, 'depth': 30.3,
+        'S-P':     (215.8, 12.6),
+        'PP-P':    (18.7, 8.1),
+        'sS-S':    (14.6, 5.8),
+        'SS-S':    (39.6, 5.4),
+    },
+    'S1197a': {
+        'delta': 32.2, 'depth': 35.7,
+        'S-P':     (191.2, 12.0),
+        'pP-P':    (8.4, 3.6),
+        'PP-P':    (15.4, 8.1),
+        'sS-S':    (14.7, 6.0),
     },
     'S1222a': {
-        'delta': 36.1,  'depth': 32.8,
-        'S-P':   (216.0,  5.0),
-        'ScS-S': (258.0, 12.0),
+        'delta': 37.6, 'depth': 61.7,
+        'S-P':     (216.0, 14.1),
+        'PP-P':    (28.0, 8.1),
+        'PPP-P':   (37.8, 12.0),
+        'ScS-S':   (258.0, 27.4),
     },
 }
 
+_N_PH = {ev: sum(1 for k, v in obs.items() if isinstance(v, tuple))
+         for ev, obs in TT_DATA.items()}
 # ── gravity and pressure profiles (computed once at import) ───────────────────
 def _detect_metal_cmb_from_density(rho, r_km):
     depth = MARS_RADIUS - r_km
@@ -509,6 +674,37 @@ def _load_samuel_reference():
         'crust_vs':       crust_vs,
         'crust_rho':      crust_rho,
     }
+
+# ── Khan 2023 LSL ensemble member (a44: 取代 Samuel 的固定層) ─────────────
+# 換的理由是質量與慣量矩,不是走時:
+#   Samuel 2023 釋出剖面   ΔM/M = +0.60 %   I/MR^2 = 0.3653 (Konopliv +32 sigma)
+#   0-100 km 柱體 6.906 % 落在 Khan 1000 個後驗成員 (5.5-6.6 %) 之外
+#   Khan 全體            ΔM/M = 0.03-0.05 % I/MR^2 ~ 0.3634
+# 成員以 M_col 分位選出(與 likelihood 正交),不是挑 mass/moi 最好的那個。
+# Model_820 = ensemble 的 50 百分位,M_col = 6.408 % Mars。
+#
+# NOTE: 不用 khan_median.npz —— 逐點取中位給出的柱體落在 ensemble 的
+#       99.5 百分位,且 Moho 被抹成 0-50 km 的連續梯度,不是代表性成員。
+KHAN_MODEL_PATH = ('/net/beno3/data1/jcchen2/Mars_Khan_2023/LSL_Models/'
+                   'Model_820.txt')
+
+def _load_khan_member(path=KHAN_MODEL_PATH):
+    # 檔案格式: Depth[km] Vp[km/s] Vs[km/s] Rho[g/cm3] T[K] g[m/s2] P[Pa]
+    # 分段常數(每段起點給值),所以用 'previous' 階梯插值,不能用線性 ——
+    # 線性會把 Moho 抹成過渡帶。
+    d = np.loadtxt(path)
+    z_src = d[:, 0]
+    crust_z = np.linspace(0.0, SC_Z_FIXED, 200)
+    idx = np.searchsorted(z_src, crust_z, side='right') - 1
+    idx = np.clip(idx, 0, len(z_src) - 1)
+    return {
+        'crust_z':   crust_z,
+        'crust_vp':  d[idx, 1],
+        'crust_vs':  d[idx, 2],
+        'crust_rho': d[idx, 3],
+    }
+
+_khan_cache = _load_khan_member()
 
 _samuel_cache = _load_samuel_reference()
 
@@ -1361,7 +1557,16 @@ def build_taup(prof, model_name, samuel_cache):
 
         # 固相段厚度太薄就當作整層液相,液相從地函底直接開始
         if i0 > 0 and (d_b[i0-1] - d_b[0]) < H_MIN_LAYER:
+            z_top = d_b[0]
             d_b, vp_b, vs_b, rho_b = d_b[i0:], vp_b[i0:], vs_b[i0:], rho_b[i0:]
+            # 液相必須從 z_bml_top 起算。丟掉薄固相段後若不補這一點,
+            # 地函底 (Vs>0) 與液相首點之間空一格,TauP 會把 Vs 內插到 0
+            # -> "zero S velocity without a discontinuity" -> divide by zero
+            # (88 校準時 Mg#-0.0033 給 h_sol=3km < 網格 4.3km,即命中此處)
+            d_b   = np.concatenate([[z_top],    d_b])
+            vp_b  = np.concatenate([[vp_b[0]],  vp_b])
+            vs_b  = np.concatenate([[0.0],      vs_b])
+            rho_b = np.concatenate([[rho_b[0]], rho_b])
             i0 = 0
 
         for d, vp, vs, r in zip(d_b[:i0], vp_b[:i0], vs_b[:i0], rho_b[:i0]):
@@ -1423,18 +1628,20 @@ def compute_solidus_penalty(prof, params):
 
 def compute_misfit(taup_model, obs_dataset, prof, params=None,
                    mass_sigma=0.0, moi_sigma=0.0, grav_sigma=0.0, ric_sigma=0.0):
-    phases_std   = ['P', 'S', 'pP', 'sP', 'PP', 'PPP', 'SS', 'SSS', 'sS', 'ScS', 'SKS']
-    phases_pdiff = phases_std + ['Pdiff']
+    phases_std   = ['P', 'S', 'pP', 'sP', 'PP', 'PPP', 'SS', 'SSS', 'sS', 'ScS']
  
     tt_total, tt_n_ev, tt_n_ph, tt_n_miss, tt_n_capped = 0.0, 0, 0, 0, 0
-    miss_by_event = {}
+    tt_n_branch = 0
+    miss_by_event, seen_events = {}, set()
+    miss_list = []   
  
     for event, obs in obs_dataset.items():
         try:
+            need_sks = any(k.startswith('SKS') for k in obs)
             arrivals = taup_model.get_travel_times(
                 source_depth_in_km=obs.get('depth', 10.0),
                 distance_in_degree=obs['delta'],
-                phase_list=phases_pdiff if event == 'S1000a' else phases_std)
+                phase_list=phases_std + (['SKS'] if need_sks else []))
         except Exception as e:
             print(f"  {event}: FAILED {e}"); continue
  
@@ -1458,7 +1665,6 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
             'ScS-S':        _tdiff('ScS', 'S'),
             'SS-PP':        _tdiff('SS',  'PP'),
             'SKS-PP':       _tdiff('SKS', 'PP'),
-            'PP-PbdiffPcP': _tdiff('PP',  'Pdiff'),
         }
  
         ev_sum, ev_n, ev_miss = 0.0, 0, 0
@@ -1468,47 +1674,82 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
             p_val = pred.get(phase)
             if p_val is None:
                 ev_sum += MISS_PENALTY; ev_n += 1; ev_miss += 1
+                miss_list.append(f'{event}:{phase}:nopred')
                 continue
             obs_t, sigma = obs_val
             if sigma <= 0 or not np.isfinite(obs_t):
                 continue
+            # 不罰、不計入 ev_n:那筆預測值根本不是該相位(4000 s vs 30 s),
+            # 是模型「對這筆資料沒有預測」而非「預測得差」。
+            # 罰 MISS_PENALTY 會在似然面上造出一道 12 單位、位置隨參數移動的牆
+            # (88 校準的 15 次擾動裡觸發 5 次),那不是資料的偏好。
+            # a32 的反向誘因(弄掉難相位變便宜)在此不成立:300 s 遠高於任何真實
+            # 殘差(實測 capped=0,最大 < 10 sigma ~ 100 s),模型無法藉由小幅
+            # 調整把真實相位推過門檻。
+            # 代價:n_data 隨模型變(158-160),misfit 不可跨模型直接比。
+            # tt_n_branch 已進 CHAIN_KEYS,可事後檢查觸發頻率。
+            if abs(obs_t - p_val) > BRANCH_JUMP_S:
+                tt_n_branch += 1
+                miss_list.append(f'{event}:{phase}:branchjump@{p_val:.0f}')
+                continue
             res_sigma = abs(obs_t - p_val)/sigma
             if not np.isfinite(res_sigma):
                 ev_sum += MISS_PENALTY; ev_n += 1; ev_miss += 1
+                miss_list.append(f'{event}:{phase}:nonfinite')
                 continue
             if res_sigma >= RES_CAP:
                 tt_n_capped += 1
+                miss_list.append(f'{event}:{phase}:capped@{res_sigma:.1f}')
             ev_sum += min(res_sigma, RES_CAP); ev_n += 1
+            
  
         if ev_n > 0:
-            tt_total  += ev_sum/ev_n
+            tt_total  += ev_sum
             tt_n_ev   += 1
             tt_n_ph   += ev_n - ev_miss
             tt_n_miss += ev_miss
             miss_by_event[event] = ev_miss
+            seen_events.add(event)
  
     tt_misfit = tt_total if tt_n_ev > 0 else 999.0
     if not np.isfinite(tt_misfit):
         tt_misfit = 999.0
-    n_ev_expected = len(obs_dataset)
-    if tt_n_ev < n_ev_expected:
-        tt_misfit += EVENT_FAIL*(n_ev_expected - tt_n_ev)
+    for ev in obs_dataset:
+        if ev not in seen_events:
+            tt_misfit += MISS_PENALTY_PER_PH * _N_PH[ev]
  
     solidus_penalty = compute_solidus_penalty(prof, params) if params else 0.0
-    total = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma + ric_sigma
+    total = (tt_misfit + solidus_penalty
+         + W_MASS*mass_sigma + W_MOI*moi_sigma
+         + grav_sigma + ric_sigma)
     if not np.isfinite(total):
         total = 999.0
+
+    n_att   = tt_n_ph + tt_n_miss
+    tt_per  = tt_misfit/n_att if n_att else np.nan
+    geo_sum = mass_sigma + moi_sigma
+    n_data  = n_att + 2
+    misfit_reduced = total/n_data if n_data else np.nan
  
-    print(f"  TT={tt_misfit:.4f}(events={tt_n_ev}/{n_ev_expected}, phases={tt_n_ph}, "
-          f"miss={tt_n_miss}, capped={tt_n_capped})  solidus={solidus_penalty:.4f}  "
-          f"mass={mass_sigma:.2f}s  moi={moi_sigma:.2f}s  grav={grav_sigma:.2f}s  "
-          f"ric={ric_sigma:.2f}s  total={total:.4f}")
+    print(f"  TT={tt_misfit:.4f}(events={tt_n_ev}/{len(obs_dataset)}, "
+          f"phases={tt_n_ph}, miss={tt_n_miss}, branch={tt_n_branch}, "
+          f"capped={tt_n_capped})  "
+          f"solidus={solidus_penalty:.4f}  "
+          f"mass={mass_sigma:.2f}sig  moi={moi_sigma:.2f}sig  "
+          f"grav={grav_sigma:.2f}sig  ric={ric_sigma:.2f}sig  total={total:.4f}")
+    print(f"  per-datum: tt={tt_per:.2f}sig ({n_att})  mass={mass_sigma:.2f}sig  "
+          f"moi={moi_sigma:.2f}sig  |  reduced={misfit_reduced:.3f} (N={n_data})")
  
     return total, tt_n_ph, {
         'misfit_tt': tt_misfit, 'misfit_solidus': solidus_penalty,
         'grav_sigma': grav_sigma, 'ric_sigma': ric_sigma,
         'tt_n_ev': tt_n_ev, 'tt_n_ph': tt_n_ph, 'tt_n_miss': tt_n_miss,
-        'tt_n_capped': tt_n_capped, 'tt_miss_by_event': miss_by_event,
+        'tt_n_capped': tt_n_capped, 'tt_n_branch': tt_n_branch,
+        'tt_miss_by_event': miss_by_event,
+        'tt_per_datum':   tt_per,
+        'geo_sum':        geo_sum,
+        'misfit_reduced': misfit_reduced,
+        'n_data':         n_data, 'tt_miss_list':   miss_list,
     }
 
 # ── forward model ─────────────────────────────────────────────────────────────
@@ -1525,7 +1766,7 @@ def forward(params, run_dir, model_name, samuel_cache):
 def _forward_impl(params, run_dir, model_name, samuel_cache):
     """a36:一條自洽剖面決定一切。
  
-    回傳 (misfit, n_data, components, prof, None)
+    回傳 (misfit, _n_ph, components, prof, None)
     第四個位置從 fort56_data 換成 prof(整條剖面),第五個保留 None
     以維持呼叫端的 5-tuple 介面。
     """
@@ -1572,7 +1813,7 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
     M_pred, moi_pred = prof['M_pred'], prof['moi_pred']
     mass_sigma = abs(MARS_MASS_OBS - M_pred)/MARS_MASS_SIGMA
     moi_sigma  = abs(MOI_OBS - (moi_pred - MOI_BIAS))/MOI_SIGMA
-    print(f"  mass={mass_sigma:.2f}s  moi={moi_sigma:.2f}s")
+    print(f"  mass={mass_sigma:.2f}sig  moi={moi_sigma:.2f}sig")
  
     try:
         taup_model = build_taup(prof, model_name, samuel_cache)
@@ -1580,8 +1821,8 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
         print(f"  TauP failed: {e}")
         return None, None, None, None, None
  
-    misfit, n_data, components = compute_misfit(
-        taup_model, SAMUEL_DATA, prof, params=params,
+    misfit, _n_ph, components = compute_misfit(
+        taup_model, TT_DATA, prof, params=params,
         mass_sigma=mass_sigma, moi_sigma=moi_sigma,
         grav_sigma=grav_sigma, ric_sigma=ric_sigma)
  
@@ -1628,19 +1869,32 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
         'bml_n_pass':      bml['n_pass'],
     })
  
-    return misfit, n_data, components, prof, None
+    return misfit, _n_ph, components, prof, None
 # ── MCMC ──────────────────────────────────────────────────────────────────────
+# 94 實測(R_cmb=1620, w_S=0.170 附近):
+#   沿 delta_R_cmb = 1630 * delta_w_S 走,質量幾乎不變
+#     dw = +0.004 (R +6.5 km)   mass 9.45 -> 9.40   dS = -1.09
+#     dw = +0.012 (R +19.6 km)  mass 9.45 -> 9.21   dS = -3.28
+#   等向提議下同樣的 R_cmb 位移單獨移動,mass 會變 3.4 sigma。
+# a44 前 140 步 R_cmb 在 11 條鏈全是水平直線:STEP['R_cmb']=1.0 下
+# 單步位移 1 km,走完 500 km 的 prior 需要 25 萬步。脊向提議解決這件事。
+# 仍是對稱提議(兩項都是零均值高斯的線性組合),細緻平衡不破。
+_RIDGE_KM_PER_WS = 1630.0
+_RIDGE_SIGMA     = 0.004      # w_S 的脊向步長 -> R_cmb 走 6.5 km,單步 dS ~ 1.1
 def propose(current, rng):
-    if _PROP_CHOL is None:
-        return {k: current[k] + rng.normal(0, STEP[k]) for k in PRIOR}
-    dx = _PROP_CHOL @ rng.standard_normal(len(PARAM_ORDER))
-    return {k: current[k] + dx[i] for i, k in enumerate(PARAM_ORDER)}
+    # No truncation: out-of-prior proposals are counted as rejections in run_mcmc.
+    p = {k: current[k] + rng.normal(0, STEP[k]) for k in PRIOR}
+    d = rng.normal(0, _RIDGE_SIGMA)
+    p['w_S']   += d
+    p['R_cmb'] += _RIDGE_KM_PER_WS*d
+    return p
+
 
 def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     chain_dir = os.path.join(MCMC_DIR, f"{prefix}_{chain_id:02d}")
     os.makedirs(chain_dir, exist_ok=True)
 
-    samuel_cache = _samuel_cache
+    samuel_cache = _khan_cache
 
     current = (start_params or START_PARAMS).copy()
 
@@ -1672,7 +1926,7 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     else:
         run_dir    = os.path.join(chain_dir, "step_current")
         model_name = f"mcmc_{prefix}_c{chain_id:02d}_current"
-        for attempt in range(20):
+        for attempt in range(40):
             trial = current.copy() if attempt == 0 else {
                 k: float(rng.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
             if attempt > 0:
@@ -1681,7 +1935,8 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                       f"Mg#_bulk_bml={trial['Mg#_bulk_bml']:.3f}  w_S={trial['w_S']:.3f}")
             current_misfit, _, current_components, _, _ = forward(
                 trial, run_dir, model_name, samuel_cache)
-            if current_misfit is not None and np.isfinite(current_misfit):
+            if (current_misfit is not None and np.isfinite(current_misfit)
+                and current_misfit < START_MISFIT_MAX):
                 current = trial
                 print(f"  Start OK (attempt {attempt+1}): misfit={current_misfit:.4f}")
                 break
@@ -1803,7 +2058,7 @@ if __name__ == "__main__":
 
     CORE_EOS_ROUTE = args.route
     CF.configure(route=CORE_EOS_ROUTE, verbose=True)
-    START_PARAMS['R_cmb'] = {'A': 1500.0, 'B': 1650.0}[CORE_EOS_ROUTE]
+    START_PARAMS['R_cmb'] = {'A': 1500.0, 'B': 1620.0}[CORE_EOS_ROUTE]
 
     if args.start is not None:
         try:
@@ -1826,7 +2081,6 @@ if __name__ == "__main__":
         start_params = {k: float(rng_init.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
         print(f"random_start: {start_params}")
 
-    _PROP_CHOL = _load_prop_chol(args.route)
     
     if args.scan_R:
         run_dir = os.path.join(MCMC_DIR, 'scan_R')
@@ -1835,7 +2089,7 @@ if __name__ == "__main__":
               f"{'mass_sig':>10}{'P_cmb':>8}{'rho_core':>10}{'R_ic':>7}")
         for R in np.arange(1400., 1901., 25.):
             p = {**START_PARAMS, 'R_cmb': float(R)}
-            out = forward(p, run_dir, f'scanR{R:.0f}', _samuel_cache)
+            out = forward(p, run_dir, f'scanR{R:.0f}', _khan_cache)
             if out[2] is None:
                 print(f"{R:8.0f}   reject"); continue
             c = out[2]

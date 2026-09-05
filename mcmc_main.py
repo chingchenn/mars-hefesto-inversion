@@ -70,22 +70,37 @@ MARS_RADIUS      = 3389.5
 MARS_RADIUS_M    = MARS_RADIUS * 1000
 T_SURF           = 220.0
 MARS_MASS_OBS    = 6.4171e23
-MARS_MASS_SIGMA  = MARS_MASS_OBS * 0.01
-MOI_OBS          = 0.36379   # Bagheri 2019 / Konopliv 2016, C/MR^2 with
-                             # R = mean radius 3389.5 km (Samuel 2021/2023 framework).
-                             # Drilleau 2026 uses Konopliv 2020 = 0.3634 +- 0.00006,
-                             # 1 sigma away and in the opposite direction -> discussion
-                             # sensitivity, not the baseline.
-MOI_SIGMA        = 0.0005
-MOI_BIAS         = 0.0  # pipeline systematic: pure-Samuel PanelJ through this
-                             # integrator gives MoI=0.36515 vs obs 0.36379 (budget test)
+MARS_MASS_OBS    = 6.4171e23
+MARS_MASS_SIGMA  = MARS_MASS_OBS * 2.7e-3
+                             #   0.263 % = sqrt(0.031^2 + 0.032^2 + 0.259^2)
+                             #   0.031 % mean density 3935 +- 1.2 kg/m3
+                             #           (Rivoldini 2011; used by Khan 2023,
+                             #            Irving 2023, Bi 2025)
+                             #   0.032 % nGibbs vs HeFESTo, 2-19 GPa, same
+                             #           composition and P-T (this work)
+                             #   0.259 % fixed 0-100 km column: measured
+                             #           forward sensitivity to swapping the
+                             #           borrowed crust (Samuel 2023, 68 km /
+                             #           3025 kg m-3) for Kim et al. 2023
+                             #           (48 km / 2650 kg m-3)
+MOI_OBS          = 0.3634    # Konopliv 2020; same value as Khan 2023,
+                             # Irving 2023, Bi 2025, Drilleau 2026.
+                             # Supersedes 0.36379 (Konopliv 2016 / Bagheri
+                             # 2019) used in a31-a38.
+MOI_SIGMA        = 6.4e-4    # Konopliv 2020 X 8 times (since we have fixed crsut)
+MOI_BIAS         = 0.0
 MCMC_TEMPERATURE = 1.0
+
+# ── 地球化學約束(a42C):bulk Fe/Si = CI chondritic(WD94)────────────────
+FESI_OBS = 1.71    # CI chondrite Fe/Si 質量比;WD94 假設 Mars bulk 承襲此值
+FESI_SIG = 0.17    # chondrite 群間變異 ~10%(Drilleau 2026 §3.1.1 caveat);
+                   # YM20 非 chondritic 情境意味此錨可能偏高 -> limitation
 
 SC_N_FIXED  = 40      # 節點數
 SC_Z_FIXED  = 100.0   # km,外借區段底部
 SC_N_MAN   = 250       # 地函節點
 SC_N_BML   = 40        # BML 節點
-SC_N_CORE  = 60        # 核節點
+SC_N_CORE  = 60        # 核節點s
 SC_N_ITER  = 8         # 鬆弛上限
 SC_TOL_P   = 0.01      # GPa,收斂判準 max|P_new - P_old|
 SC_G_GRAV  = 6.674e-11
@@ -95,6 +110,9 @@ GAP_ON      = False
 GAP_SIGMA   = 150.0    # K
 RIC_MAX_KM  = 750.0
 RIC_MAX_SIG = 50.0     # km
+
+
+
 
 # ── MCMC parameters ──────────────────────────────────────────────────────────
 _MG_FE_TOTAL = 5.16834   # Mg + Fe mol (Yoshida-Motoyama)
@@ -127,20 +145,20 @@ PRIOR = {
 'T_core': (1550.0, 3600.0),   # a26: lower 1800->1550, ICB 溫度計臨界溫度在 1700-1820 K
 'Mg#_bulk_bml': (0.20, 0.80),
 'BML_thickness': (0.0, 400.0),
-'w_S': (0.05, 0.30),          # 化學計量上限 0.365; 地球化學上限 ~0.17 不設進 prior,
+'w_S': (0.05, 0.40),          # 化學計量上限 0.365; 地球化學上限 ~0.17 不設進 prior,
                            # 讓 posterior 與 17 wt% 的關係成為結果
 'R_cmb': (1400, 1900),
 }  
 
 STEP = {
-'T_lit': 50.0,
-'P_lit': 0.7,
-'Mg#': 0.025,
-'T_core': 100.0,
-'Mg#_bulk_bml': 0.06,
-'BML_thickness': 25.0,
-'w_S': 0.02,
-'R_cmb':25.0,
+'T_lit': 40.0,
+'P_lit': 0.5,
+'Mg#': 0.015,
+'T_core': 80.0,
+'Mg#_bulk_bml': 0.05,
+'BML_thickness': 20.0,
+'w_S': 0.015,
+'R_cmb': 25.0,
 }
 
 CHAIN_KEYS = (
@@ -153,21 +171,9 @@ CHAIN_KEYS = (
     'R_ic_km', 'ric_sigma', 'rho_core_mean', 'Vp_core_cmb',
     'P_center_core', 'T_center_core',
     'gap_min', 'P_cmb', 'P_bml_top', 'z_lit_km',
-    'sc_n_iter', 'sc_dP', 'sc_dz_lit', 'bml_n_pass',
+    'sc_n_iter', 'sc_dP', 'sc_dz_lit', 'bml_n_pass', 'fesi_sigma', 'fesi_pred',
 )
 
-PROP_SCALE  = 2.38**2 / 8.0
-PARAM_ORDER = ('T_lit', 'P_lit', 'Mg#', 'T_core',
-               'Mg#_bulk_bml', 'BML_thickness', 'w_S', 'R_cmb')
-
-def _load_prop_chol(route):
-    path = f'prop_cov_a37{route}.npz'
-    if not os.path.exists(path):
-        return None
-    d = np.load(path)
-    assert tuple(d['param_order']) == PARAM_ORDER
-    print(f"proposal: cov loaded from {path}", flush=True)
-    return np.linalg.cholesky(PROP_SCALE * d['cov'])
 
 # ── Samuel 2023 paths ─────────────────────────────────────────────────────────
 SAMUEL_DATA_DIR = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
@@ -183,114 +189,259 @@ SAMUEL_FIG1K_DIR = ("/net/beno3/data1/jcchen2/Mars_Samuel_2023/"
                     "METADATA_BML/DATA_FIG1/PANEL_K")
 
 # ── seismic data ──────────────────────────────────────────────────────────────
+
 SAMUEL_DATA = {
     'S0154a': {
-        'delta': 29.7,  'depth': 17.4,
-        'SS-S':  (25.3, 5.0),
-        'SSS-S': (35.0, 8.0),
+        'delta': 29.9, 'depth': 60.6,
+        'S-P':   (174.4, 13.0),
+        'SS-S':  (25.3, 5.4),
+        'SSS-S': (35.0, 8.9),
     },
     'S0173a': {
-        'delta': 30.9,  'depth': 28.4,
-        'S-P':   (178.8,  5.0),
-        'sP-P':  (9.43,   5.0),
-        'PP-P':  (19.9,   8.0),
-        'PPP-P': (34.4,  12.0),
-        'sS-S':  (13.2,   5.0),
-        'SS-S':  (24.4,   5.0),
-        'SSS-S': (40.5,   8.0),
-        'ScS-S': (345.2, 12.0),
+        'delta': 30.2, 'depth': 41.7,
+        'S-P':   (178.8, 10.1),
+        'sP-P':  (9.43, 6.6),
+        'PP-P':  (19.9, 8.1),
+        'PPP-P': (34.4, 12.0),
+        'sS-S':  (13.2, 6.5),
+        'SS-S':  (24.4, 5.1),
+        'SSS-S': (40.5, 8.9),
+        'ScS-S': (345.2, 17.9),
     },
     'S0185a': {
-        'delta': 54.8,  'depth': 17.4,
-        'S-P':   (327.28,  5.0),
-        'pP-P':  (4.0,     5.0),
-        'PP-P':  (22.47,   8.0),
-        'PPP-P': (49.3,   12.0),
-        'sS-S':  (10.0,    5.0),
-        'SS-S':  (30.9,    5.0),
-        'SSS-S': (55.4,    8.0),
-        'ScS-S': (152.3,  12.0),
+        'delta': 54.7, 'depth': 12.5,
+        'S-P':   (327.28, 25.4),
+        'pP-P':  (4.0, 4.3),
+        'PP-P':  (22.47, 8.1),
+        'PPP-P': (49.3, 12.0),
+        'sS-S':  (10.0, 9.6),
+        'SS-S':  (30.9, 5.4),
+        'SSS-S': (55.4, 8.3),
+        'ScS-S': (152.3, 50.5),
     },
     'S0235b': {
-        'delta': 30.5,  'depth': 26.1,
-        'S-P':   (171.4,  5.0),
-        'PP-P':  (18.6,   8.0),
-        'PPP-P': (32.0,  12.0),
-        'sS-S':  (9.2,    5.0),
-        'SS-S':  (23.2,   5.0),
-        'SSS-S': (33.3,   8.0),
-        'ScS-S': (343.9, 12.0),
+        'delta': 29.2, 'depth': 21.5,
+        'S-P':   (171.4, 10.1),
+        'PP-P':  (18.6, 8.0),
+        'PPP-P': (32.0, 12.0),
+        'sS-S':  (9.2, 6.9),
+        'SS-S':  (23.2, 5.7),
+        'SSS-S': (33.3, 8.9),
+        'ScS-S': (343.9, 17.7),
     },
     'S0325a': {
-        'delta': 42.0,  'depth': 33.8,
-        'S-P':   (229.3,  5.0),
-        'pP-P':  (9.8,    5.0),
-        'PP-P':  (21.1,   8.0),
-        'PPP-P': (34.4,  12.0),
-        'sS-S':  (13.8,   5.0),
-        'SS-S':  (26.1,   5.0),
-        'SSS-S': (50.3,   8.0),
-        'ScS-S': (220.4, 12.0),
+        'delta': 41.5, 'depth': 44.4,
+        'S-P':   (229.3, 11.9),
+        'pP-P':  (9.8, 3.5),
+        'PP-P':  (21.1, 8.1),
+        'PPP-P': (34.4, 12.0),
+        'sS-S':  (13.8, 5.9),
+        'SS-S':  (26.1, 5.7),
+        'SSS-S': (50.3, 8.0),
+        'ScS-S': (220.4, 40.0),
     },
     'S0407a': {
-        'delta': 29.1,  'depth': 31.3,
-        'S-P':   (170.7,  5.0),
-        'pP-P':  (6.77,   5.0),
-        'PP-P':  (23.38,  8.0),
-        'sS-S':  (13.3,   5.0),
-        'SS-S':  (21.1,   5.0),
-        'SSS-S': (33.1,   8.0),
-        'ScS-S': (370.0, 12.0),
+        'delta': 27.9, 'depth': 33.7,
+        'S-P':   (170.7, 9.9),
+        'pP-P':  (6.77, 3.6),
+        'PP-P':  (23.38, 8.9),
+        'sS-S':  (13.3, 5.9),
+        'SS-S':  (21.1, 5.5),
+        'SSS-S': (33.1, 8.9),
+        'ScS-S': (370.0, 24.4),
     },
     'S0409d': {
-        'delta': 30.6,  'depth': 26.1,
-        'S-P':   (163.2,  5.0),
-        'pP-P':  (8.3,    5.0),
-        'PP-P':  (27.6,   8.0),
+        'delta': 30.3, 'depth': 24.0,
+        'S-P':   (163.2, 12.8),
+        'pP-P':  (8.3, 3.6),
+        'PP-P':  (27.6, 8.1),
         'PPP-P': (36.94, 12.0),
-        'sS-S':  (8.4,    5.0),
-        'SS-S':  (20.9,   5.0),
-        'SSS-S': (39.8,   8.0),
-        'ScS-S': (320.1, 12.0),
+        'sS-S':  (8.4, 6.0),
+        'SS-S':  (20.9, 5.1),
+        'SSS-S': (39.8, 8.9),
+        'ScS-S': (320.1, 26.9),
     },
     'S0474a': {
-        'delta': 20.7,  'depth': 30.7,
-        'S-P':   (121.6,  5.0),
-        'PP-P':  (13.4,   8.0),
-        'sS-S':  (9.7,    5.0),
-        'SS-S':  (16.9,   5.0),
-        'SSS-S': (25.8,   8.0),
-        'ScS-S': (455.0, 12.0),
+        'delta': 19.7, 'depth': 55.9,
+        'S-P':   (121.6, 14.4),
+        'PP-P':  (13.4, 8.1),
+        'PPP-P': (24.8, 12.1),
+        'SS-S':  (15.8, 5.4),
+        'SSS-S': (32.4, 9.2),
     },
     'S0484b': {
-        'delta': 26.0,  'depth': 30.1,
-        'S-P':   (151.0,  5.0),
-        'PP-P':  (16.0,   8.0),
-        'PPP-P': (29.4,  12.0),
-        'sS-S':  (11.6,   5.0),
-        'SS-S':  (19.6,   5.0),
-        'SSS-S': (33.4,   8.0),
-        'ScS-S': (360.0, 12.0),
+        'delta': 30.9, 'depth': 45.0,
+        'S-P':   (173.1, 9.1),
+        'pP-P':  (5.5, 4.0),
+        'PP-P':  (19.73, 8.1),
+        'sS-S':  (13.0, 6.5),
+        'SS-S':  (17.4, 8.2),
+        'ScS-S': (322.3, 23.9),
+    },
+    'S0784a': {
+        'delta': 30.6, 'depth': 18.7,
+        'S-P':   (179.3, 12.2),
+        'pP-P':  (6.5, 3.8),
+        'PP-P':  (13.7, 8.1),
+        'PPP-P': (22.4, 13.0),
+        'sS-S':  (7.2, 6.3),
+        'SS-S':  (19.6, 5.9),
+        'SSS-S': (28.0, 16.8),
+    },
+    'S0802a': {
+        'delta': 27.9, 'depth': 17.0,
+        'S-P':   (180.3, 13.5),
+        'pP-P':  (4.0, 3.9),
+        'PP-P':  (25.6, 9.9),
+        'PPP-P': (33.9, 12.1),
+        'sS-S':  (9.3, 6.5),
+        'SS-S':  (22.4, 5.4),
+        'SSS-S': (36.5, 10.5),
+        'ScS-S': (387.6, 28.3),
+    },
+    'S0809a': {
+        'delta': 29.4, 'depth': 20.0,
+        'S-P':   (191.95, 19.8),
+        'pP-P':  (4.5, 4.0),
+        'PP-P':  (16.25, 8.0),
+        'PPP-P': (29.65, 12.0),
+        'sS-S':  (8.1, 6.8),
+        'SS-S':  (23.8, 5.1),
+        'SSS-S': (39.3, 9.0),
+        'ScS-S': (373.5, 31.3),
     },
     'S0820a': {
-        'delta': 75.2,  'depth': 26.1,
-        'S-P':   (437.5,  5.0),
-        'SS-S':  (48.4,   5.0),
-        'SSS-S': (82.3,   8.0),
-        'SS-PP': (22.6,  10.0),
+        'delta': 29.4, 'depth': 18.6,
+        'S-P':   (174.1, 13.4),
+        'PP-P':  (21.9, 9.1),
+        'PPP-P': (32.1, 12.0),
+        'sS-S':  (8.5, 6.1),
+    },
+    'S0861a': {
+        'delta': 55.1, 'depth': 38.5,
+        'S-P':   (319.3, 17.3),
+        'PP-P':  (19.6, 8.2),
+        'PPP-P': (47.6, 12.1),
+        'SS-S':  (41.1, 5.4),
+    },
+    'S0864a': {
+        'delta': 29.5, 'depth': 38.3,
+        'S-P':   (171.4, 17.9),
+        'PP-P':  (18.0, 8.0),
+        'PPP-P': (27.9, 12.0),
+        'sS-S':  (17.3, 7.4),
+        'SS-S':  (26.4, 5.1),
+    },
+    'S0916d': {
+        'delta': 29.4, 'depth': 30.8,
+        'S-P':   (170.8, 9.4),
+        'pP-P':  (3.9, 4.6),
+        'PP-P':  (19.3, 8.1),
+        'PPP-P': (36.1, 12.0),
+        'SS-S':  (19.0, 5.4),
+        'SSS-S': (42.9, 8.9),
+        'ScS-S': (342.8, 23.4),
+    },
+    'S0918a': {
+        'delta': 16.8, 'depth': 56.5,
+        'S-P':   (102.4, 13.0),
+        'PP-P':  (12.8, 8.2),
+        'PPP-P': (22.5, 12.1),
+        'SS-S':  (21.2, 5.7),
+        'SSS-S': (35.0, 9.1),
+    },
+    'S0976a': {
+        'delta': 143.6, 'depth': 52.5,
+        'SS-PP': (854.4, 19.3),
     },
     'S1000a': {
-        'delta': 87.0,  'depth': 27.0,
-        'S-P':         (490.4,   5.0),
-        'SS-S':        (54.9,    5.0),
-        'SSS-S':       (93.3,    8.0),
-        'SKS-PP':      (87.0,   10.0),
-        'PP-PbdiffPcP': (22.5,  10.0),
+        'delta': 126.09, 'depth': 0.0,
+        'SS-PP': (749.0, 10.8),
+    },
+    'S1012d': {
+        'delta': 37.6, 'depth': 15.6,
+        'S-P':   (221.7, 11.6),
+        'pP-P':  (6.7, 3.5),
+        'PP-P':  (18.0, 8.1),
+        'PPP-P': (27.7, 12.0),
+        'sS-S':  (11.0, 5.8),
+        'SS-S':  (24.5, 5.4),
+        'SSS-S': (40.65, 8.9),
+    },
+    'S1015f': {
+        'delta': 30.1, 'depth': 26.1,
+        'S-P':   (177.7, 12.5),
+        'PP-P':  (20.47, 8.1),
+        'PPP-P': (35.37, 12.0),
+        'sS-S':  (11.2, 6.2),
+    },
+    'S1022a': {
+        'delta': 29.4, 'depth': 21.3,
+        'S-P':   (177.0, 13.4),
+        'pP-P':  (9.0, 3.5),
+        'PP-P':  (19.3, 8.1),
+        'PPP-P': (27.5, 12.0),
+        'sS-S':  (11.0, 5.9),
+        'SS-S':  (25.0, 5.1),
+        'SSS-S': (55.0, 8.9),
+    },
+    'S1039b': {
+        'delta': 30.1, 'depth': 38.1,
+        'S-P':   (176.1, 15.9),
+        'pP-P':  (7.8, 3.8),
+        'PP-P':  (12.3, 8.1),
+        'PPP-P': (28.7, 12.0),
+        'SS-S':  (14.9, 5.4),
+    },
+    'S1048d': {
+        'delta': 30.8, 'depth': 35.1,
+        'S-P':  (179.19, 10.6),
+        'pP-P': (7.49, 3.7),
+        'PP-P': (18.05, 8.1),
+        'SS-S': (24.3, 5.4),
+    },
+    'S1094b': {
+        'delta': 58.5, 'depth': 0.0,
+        'S-P': (343.0, 5.5),
+    },
+    'S1102a': {
+        'delta': 75.7, 'depth': 57.1,
+        'S-P': (443.7, 15.7),
+    },
+    'S1133c': {
+        'delta': 29.5, 'depth': 18.3,
+        'S-P':   (175.3, 12.4),
+        'pP-P':  (5.8, 3.4),
+        'PP-P':  (16.7, 8.1),
+        'PPP-P': (28.46, 12.0),
+        'sS-S':  (9.1, 5.7),
+        'SS-S':  (17.4, 5.9),
+        'SSS-S': (35.4, 8.9),
+    },
+    'S1153a': {
+        'delta': 82.2, 'depth': 95.9,
+        'S-P': (467.95, 11.5),
+    },
+    'S1157a': {
+        'delta': 36.9, 'depth': 30.3,
+        'S-P':  (215.8, 12.6),
+        'PP-P': (18.7, 8.1),
+        'sS-S': (14.6, 5.8),
+        'SS-S': (39.6, 5.4),
+    },
+    'S1197a': {
+        'delta': 32.2, 'depth': 35.7,
+        'S-P':  (191.2, 12.0),
+        'pP-P': (8.4, 3.6),
+        'PP-P': (15.4, 8.1),
+        'sS-S': (14.7, 6.0),
     },
     'S1222a': {
-        'delta': 36.1,  'depth': 32.8,
-        'S-P':   (216.0,  5.0),
-        'ScS-S': (258.0, 12.0),
+        'delta': 37.6, 'depth': 61.7,
+        'S-P':   (216.0, 14.1),
+        'PP-P':  (28.0, 8.1),
+        'PPP-P': (37.8, 12.0),
+        'ScS-S': (258.0, 27.4),
     },
 }
 
@@ -1422,7 +1573,7 @@ def compute_solidus_penalty(prof, params):
 # ── misfit ────────────────────────────────────────────────────────────────────
 
 def compute_misfit(taup_model, obs_dataset, prof, params=None,
-                   mass_sigma=0.0, moi_sigma=0.0, grav_sigma=0.0, ric_sigma=0.0):
+                   mass_sigma=0.0, moi_sigma=0.0, grav_sigma=0.0, ric_sigma=0.0, fesi_sigma=0.0):
     phases_std   = ['P', 'S', 'pP', 'sP', 'PP', 'PPP', 'SS', 'SSS', 'sS', 'ScS', 'SKS']
     phases_pdiff = phases_std + ['Pdiff']
  
@@ -1495,20 +1646,20 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
         tt_misfit += EVENT_FAIL*(n_ev_expected - tt_n_ev)
  
     solidus_penalty = compute_solidus_penalty(prof, params) if params else 0.0
-    total = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma + ric_sigma
+    total = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma + ric_sigma + fesi_sigma
     if not np.isfinite(total):
         total = 999.0
  
     print(f"  TT={tt_misfit:.4f}(events={tt_n_ev}/{n_ev_expected}, phases={tt_n_ph}, "
           f"miss={tt_n_miss}, capped={tt_n_capped})  solidus={solidus_penalty:.4f}  "
           f"mass={mass_sigma:.2f}s  moi={moi_sigma:.2f}s  grav={grav_sigma:.2f}s  "
-          f"ric={ric_sigma:.2f}s  total={total:.4f}")
+          f"ric={ric_sigma:.2f}s  fesi={fesi_sigma:.2f}s  total={total:.4f}")
  
     return total, tt_n_ph, {
         'misfit_tt': tt_misfit, 'misfit_solidus': solidus_penalty,
-        'grav_sigma': grav_sigma, 'ric_sigma': ric_sigma,
+        'grav_sigma': grav_sigma, 'ric_sigma': ric_sigma, 'fesi_sigma': fesi_sigma,
         'tt_n_ev': tt_n_ev, 'tt_n_ph': tt_n_ph, 'tt_n_miss': tt_n_miss,
-        'tt_n_capped': tt_n_capped, 'tt_miss_by_event': miss_by_event,
+        'tt_n_capped': tt_n_capped, 'tt_miss_by_event': miss_by_event,   
     }
 
 # ── forward model ─────────────────────────────────────────────────────────────
@@ -1567,13 +1718,39 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
         if lower_contrast <= 0.0: _GRAV_FAIL['lower'] += 1
         print("  BML gravitationally unstable -> reject (Kono 2025)")
         return None, None, None, None, None
- 
+    
     # ── 質量與慣量矩:同一條積分算出來的,不再事後拼接 ────────────────
     M_pred, moi_pred = prof['M_pred'], prof['moi_pred']
     mass_sigma = abs(MARS_MASS_OBS - M_pred)/MARS_MASS_SIGMA
     moi_sigma  = abs(MOI_OBS - (moi_pred - MOI_BIAS))/MOI_SIGMA
     print(f"  mass={mass_sigma:.2f}s  moi={moi_sigma:.2f}s")
- 
+
+    # ── Fe/Si budget(a42C)────────────────────────────────────────────────
+    # 矽酸鹽 formula unit 質量 (g/mol);Fe 取代 Mg 使單位變重
+    def _sil_molmass(mg):
+        return (5.16834*(mg*40.304 + (1-mg)*71.844) + 4.01931*60.084
+                + 0.27259*56.077 + 0.37376/2*101.961
+                + 0.10105/2*61.979 + 0.06146/2*151.990)
+    _r = (MARS_RADIUS - prof['z_km'])*1e3
+    def _shell_mass(mask):
+        r  = _r[mask][::-1]                    # 由內往外
+        rh = prof['rho'][mask][::-1]*1e3       # g/cm3 -> kg/m3
+        rm = 0.5*(rh[1:] + rh[:-1])
+        return float(np.sum(4*np.pi/3*rm*(r[1:]**3 - r[:-1]**3)))
+    M_man = _shell_mass(prof['m_crust']) + _shell_mass(prof['m_mantle'])
+    # 固定地殼柱以 mantle Mg# 計 Fe,~4% 質量,偏差 << FESI_SIG
+    M_bml = _shell_mass(prof['m_bml'])
+    M_cor = _shell_mass(prof['m_core'])
+    n_man = M_man*1e3/_sil_molmass(params['Mg#'])            # formula-unit mol
+    n_bml = M_bml*1e3/_sil_molmass(params['Mg#_bulk_bml'])
+    fe_sil_kg = (n_man*(1-params['Mg#'])
+               + n_bml*(1-params['Mg#_bulk_bml']))*5.16834*55.845e-3
+    fe_cor_kg = M_cor*(1-params['w_S'])        # Fe-S 二元;核 Ni 併入 Fe(WD94 同慣例)
+    si_kg     = (n_man + n_bml)*4.01931*28.0855e-3   # 核無 Si
+    fesi_pred  = (fe_sil_kg + fe_cor_kg)/si_kg
+    fesi_sigma = abs(fesi_pred - FESI_OBS)/FESI_SIG
+    print(f"  geochem: Fe/Si={fesi_pred:.3f}  fesi_sig={fesi_sigma:.2f}s")
+    
     try:
         taup_model = build_taup(prof, model_name, samuel_cache)
     except Exception as e:
@@ -1583,7 +1760,7 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
     misfit, n_data, components = compute_misfit(
         taup_model, SAMUEL_DATA, prof, params=params,
         mass_sigma=mass_sigma, moi_sigma=moi_sigma,
-        grav_sigma=grav_sigma, ric_sigma=ric_sigma)
+        grav_sigma=grav_sigma, ric_sigma=ric_sigma, fesi_sigma=fesi_sigma)
  
     components.update({
         'Ra':              bml['Ra'],
@@ -1609,6 +1786,7 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
         'moi_sigma':       moi_sigma,
         'moi_pred':        moi_pred,
         'M_pred':          M_pred,
+        'fesi_pred': fesi_pred,
         'T_mantle_bottom': prof['T_mantle_bottom'],
         'R_ic_km':         R_ic,
         'gap_min':         gap,
@@ -1631,10 +1809,11 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
     return misfit, n_data, components, prof, None
 # ── MCMC ──────────────────────────────────────────────────────────────────────
 def propose(current, rng):
-    if _PROP_CHOL is None:
-        return {k: current[k] + rng.normal(0, STEP[k]) for k in PRIOR}
-    dx = _PROP_CHOL @ rng.standard_normal(len(PARAM_ORDER))
-    return {k: current[k] + dx[i] for i, k in enumerate(PARAM_ORDER)}
+    # No truncation: out-of-prior proposals are counted as rejections in run_mcmc.
+    # resample-until-in-bounds would be an unnormalised truncated Gaussian,
+    # q(x'|x) != q(x|x'), breaking detailed balance near the walls.
+    return {k: current[k] + rng.normal(0, STEP[k]) for k in PRIOR}
+
 
 def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     chain_dir = os.path.join(MCMC_DIR, f"{prefix}_{chain_id:02d}")
@@ -1826,7 +2005,6 @@ if __name__ == "__main__":
         start_params = {k: float(rng_init.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
         print(f"random_start: {start_params}")
 
-    _PROP_CHOL = _load_prop_chol(args.route)
     
     if args.scan_R:
         run_dir = os.path.join(MCMC_DIR, 'scan_R')

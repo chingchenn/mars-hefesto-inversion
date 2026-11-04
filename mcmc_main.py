@@ -87,7 +87,8 @@ MOI_OBS          = 0.3634    # Konopliv 2020; same value as Khan 2023,
                              # Irving 2023, Bi 2025, Drilleau 2026.
                              # Supersedes 0.36379 (Konopliv 2016 / Bagheri
                              # 2019) used in a31-a38.
-MOI_SIGMA        = 6.4e-4    # Konopliv 2020 X 8 times (since we have fixed crsut)
+MOI_SIGMA        = 6.4e-4    # ~10.7 x Konopliv 2020 formal (6e-5): MoI shift from swapping the
+                             # fixed 0-100 km crust (Samuel 2023 -> Kim 2023)
 MOI_BIAS         = 0.0
 MCMC_TEMPERATURE = 1.0
 
@@ -115,14 +116,34 @@ RIC_MAX_SIG = 50.0     # km
 
 
 # ── MCMC parameters ──────────────────────────────────────────────────────────
-_MG_FE_TOTAL = 5.16834   # Mg + Fe mol (Yoshida-Motoyama)
-_COMP_FIXED  = {'Si': 4.01931, 'Ca': 0.27259,
-                'Al': 0.37376, 'Na': 0.10105, 'Cr': 0.06146}
+# a53: one script for all bulk compositions, chosen with --comp (YM20 | TA | EH45).
+# Only _MG_FE_TOTAL, _COMP_FIXED and the starting Mg# differ between runs.
+COMPOSITIONS = {
+    'YM20': dict(MG_FE_TOTAL=5.16834,
+                 FIXED={'Si': 4.01931, 'Ca': 0.27259, 'Al': 0.37376, 'Na': 0.10105, 'Cr': 0.06146},
+                 MG0=4.08235),
+    'TA':   dict(MG_FE_TOTAL=5.35368,
+                 FIXED={'Si': 3.86030, 'Ca': 0.23000, 'Al': 0.31650, 'Na': 0.09077, 'Cr': 0.05098},
+                 MG0=4.01651),
+    'EH45': dict(MG_FE_TOTAL=4.90272,
+                 FIXED={'Si': 4.19598, 'Ca': 0.18930, 'Al': 0.26028, 'Na': 0.20553, 'Cr': 0.04889},
+                 MG0=3.59510),
+}
+_COMP_NAME = os.environ.get('MARS_COMP', 'YM20')
+for _i, _a in enumerate(sys.argv):
+    if _a.startswith('--comp='):
+        _COMP_NAME = _a.split('=', 1)[1]
+    elif _a == '--comp' and _i + 1 < len(sys.argv):
+        _COMP_NAME = sys.argv[_i + 1]
+if COMPOSITIONS.get(_COMP_NAME) is None:
+    raise SystemExit(f"bulk composition {_COMP_NAME!r} not defined in COMPOSITIONS")
+_MG_FE_TOTAL = COMPOSITIONS[_COMP_NAME]['MG_FE_TOTAL']
+_COMP_FIXED  = COMPOSITIONS[_COMP_NAME]['FIXED']
 
 START_PARAMS = {
 'T_lit': 1539.0,
 'P_lit': 3.69,
-'Mg#': 4.08235 / 5.16834,
+'Mg#': COMPOSITIONS[_COMP_NAME]['MG0'] / _MG_FE_TOTAL,
 'T_core': 2400.0, # CMB temperature = liquid BML temperature
 'Mg#_bulk_bml': 0.62, # bulk BML composition (Samuel ~Fe-rich)
 'BML_thickness': 168.7,
@@ -145,7 +166,7 @@ PRIOR = {
 'T_core': (1550.0, 3600.0),   # a26: lower 1800->1550, ICB 溫度計臨界溫度在 1700-1820 K
 'Mg#_bulk_bml': (0.20, 0.80),
 'BML_thickness': (0.0, 400.0),
-'w_S': (0.05, 0.40),          # 化學計量上限 0.365; 地球化學上限 ~0.17 不設進 prior,
+'w_S': (0.05, 0.365),         # a53: 上界 = 化學計量上限 (core_fes.wS_to_chi 截在 0.36485); 地球化學上限 ~0.17 不設進 prior,
                            # 讓 posterior 與 17 wt% 的關係成為結果
 'R_cmb': (1400, 1900),
 }  
@@ -172,6 +193,7 @@ CHAIN_KEYS = (
     'P_center_core', 'T_center_core',
     'gap_min', 'P_cmb', 'P_bml_top', 'z_lit_km',
     'sc_n_iter', 'sc_dP', 'sc_dz_lit', 'bml_n_pass', 'fesi_sigma', 'fesi_pred',
+    'T_solidus_bml', 'T_liquidus_bml', 'phase_branch',      # a53
 )
 
 
@@ -672,6 +694,8 @@ MG_DUNCAN_REF  = 0.75
 
 REJECT_GRAV_UNSTABLE = False
 GRAV_SCALE = 0.15        # g/cm3, ~ the Fo end-member EoS systematic (old-new = 0.18)
+                         # a53 CHECK: 0.18 was the old-vs-new Fo EoS difference before the
+                         # T_S(rho) fix; re-derive or re-justify this scale
 _GRAV_FAIL = {'upper': 0, 'lower': 0}
 
 def solidus_duncan2018(P_GPa):
@@ -727,8 +751,18 @@ _W_GAMMA   = 6200.0      # SLB2024 ringwoodite Margules
 _W_BETA    = 12900.0     # SLB2024 wadsleyite Margules
 _DH_FO_FUS = 142000.0
 _DH_FA_FUS = 89300.0
-_FA_MELT = {0.0:(1490.,'a'), 3.0:(1650.,'a'), 6.3:(1793.,'a'),
-            12.0:(1990.,'g'), 20.0:(2200.,'g')}
+# a53: effective Fa melting temperature (alpha reference state).
+#   P < 6.3 GPa : alpha-Fa nodes (1490 K at 0, 1650 K at 3.0, 1793 K at 6.3 GPa; A67)
+#   P >= 6.3 GPa: straight line from the alpha-gamma-L point,
+#                 Tm_Fa_eff(P) = 1793 + _FA_SLOPE (P - 6.3)
+#   _FA_SLOPE is the single shape parameter; it is fitted at import so that the
+#   gamma+L loop reproduces Pierru's X_L = 0.50 at 17.7 GPa (see _fit_fa_slope).
+#   Replaces the provisional gamma nodes (12 GPa 1990 K, 20 GPa 2200 K) of a52,
+#   which put a slope kink at 20 GPa, inside the posterior P_CMB range.
+_FA_ALPHA_P = (0.0, 3.0, 6.3)
+_FA_ALPHA_T = (1490., 1650., 1793.)
+_FA_P0, _FA_T0 = 6.3, 1793.0
+_FA_SLOPE = -29.0      # K/GPa, initial value only; overwritten by _fit_fa_slope()
 
 def _Tm_Fo(P):
     K0, Kp = 125.4, 5.33
@@ -741,9 +775,10 @@ def _Tm_eff(P, Tm, ph):
     d = 0.0 if ph == 'a' else _dG_Fa_ag(P, Tm)
     return Tm / (1.0 - d/_DH_FA_FUS)
 
-_FA_P = sorted(_FA_MELT)
 def _Tm_Fa(P):
-    return float(np.interp(P, _FA_P, [_Tm_eff(p, *_FA_MELT[p]) for p in _FA_P]))
+    if P < _FA_P0:
+        return float(np.interp(P, _FA_ALPHA_P, _FA_ALPHA_T))
+    return _FA_T0 + _FA_SLOPE*(P - _FA_P0)
 
 # ── generic solid+L two-phase solver (robust multistart) ──────────────────────
 def _loop_XS_XL(T, P, TmFo, TmFa, W, dGFo, dGFa, guesses):
@@ -809,7 +844,22 @@ def _compute_shift():
     _, XL = _gamma_XS_XL(raw, _PIERRU_TIE['P'], TmFo, TmFa)
     return shift, raw, XL
 
+def _fit_fa_slope():
+    # two-parameter calibration at the Pierru tie-line (a53):
+    #   shape : _FA_SLOPE such that model X_L = observed X_L at X_S = 0.74
+    #           (X_L does not depend on the rigid shift)
+    #   temperature : _DELTA_SHIFT such that T_sol(X_S = 0.74) = 2200 K
+    global _FA_SLOPE
+    def resid(s):
+        global _FA_SLOPE
+        _FA_SLOPE = s
+        return _compute_shift()[2] - _PIERRU_TIE['XL']
+    _FA_SLOPE = brentq(resid, -60.0, 0.0, xtol=1e-3)
+
+_fit_fa_slope()
 _DELTA_SHIFT, _RAW_SOL_REF, _XL_TIE_MODEL = _compute_shift()
+print(f"phase diagram: Fa slope = {_FA_SLOPE:.2f} K/GPa  shift = {_DELTA_SHIFT:.1f} K  "
+      f"raw T_sol = {_RAW_SOL_REF:.1f} K  X_L(tie) = {_XL_TIE_MODEL:.3f}")
 
 # ── diagnostics ───────────────────────────────────────────────────────────────
 _PD_FAIL    = {'no_loop': 0, 'no_invariant': 0, 'solidus': 0}
@@ -973,8 +1023,16 @@ def _rho_endmember(em, P_Pa, T_K):
         x   = 0.5 * ((rho/em['rho0'])**(2/3) - 1)
         PS  = 3*em['KS0']*x*(1+2*x)**2.5 * (1 + 1.5*(em['Ksp']-4)*x) * 1e9
         gam = em['gam0'] * (em['rho0']/rho)**em['q']
-        return PS + gam * rho*1e3 * em['Cv'] * (T_K - em['T0']) - P_Pa
-    a, b = em['rho0']*0.85, em['rho0']*4.0
+        # a53: reference temperature on the BM isentrope (Thomas et al. 2012 Eq. 17;
+        # Thomas & Asimow 2013 Eq. 5), T_S = T0 exp[(gam0/q)(1 - (rho0/rho)^q)];
+        # a52 used the constant T0, which underestimated the density (Fo ~2.4%, Fa ~0.6%)
+        T_S = em['T0'] * np.exp(em['gam0']/em['q'] * (1.0 - (em['rho0']/rho)**em['q']))
+        return PS + gam * rho*1e3 * em['Cv'] * (T_K - T_S) - P_Pa
+    # a53: upper bracket 2.2*rho0 (was 4.0). With q < 0 (Fo) T_S grows steeply on
+    # compression, f turns negative again above ~3*rho0 and has a spurious second
+    # root near 8.4 g/cm3. [0.85, 2.2]*rho0 brackets the physical root for
+    # P = 10-30 GPa and T = 1600-4200 K (both end-members).
+    a, b = em['rho0']*0.85, em['rho0']*2.2
     fa, fb = f(a), f(b)
     if not (np.isfinite(fa) and np.isfinite(fb)) or fa*fb > 0:
         print(f"  _rho_endmember bracket failed: P={P_Pa/1e9:.3f} GPa  T={T_K:.1f} K  "
@@ -1310,7 +1368,10 @@ def sc_bml(params, z_bml, P_bml_init, g_bml, T_mantle_bottom, n_pass=3):
                    Mg_solid=Mg_sol, Mg_liquid=Mg_liq, melting=pd['melting'],
                    T_interface=T_int, P_interface=P_int,
                    rho_S_interface=float(rho_S), Ra=Ra, thermal_state=state,
-                   n_pass=_p+1, dP_bml=dP)
+                   n_pass=_p+1, dP_bml=dP,
+                   T_solidus=float(pd['T_solidus']) if pd else np.nan,      # a53
+                   T_liquidus=float(pd['T_liquidus']) if pd else np.nan,
+                   phase=str(pd['phase']) if pd else 'none')
         if dP < SC_TOL_P:
             break
     return out
@@ -1461,8 +1522,12 @@ def build_taup(prof, model_name, samuel_cache):
     model_name = model_name.replace(".npz", "")
     npz_path   = os.path.join(TAUP_WORK_DIR, f'{model_name}.npz')
     nd_path    = os.path.join(TAUP_WORK_DIR, f"{model_name}.nd")
-    if os.path.exists(npz_path):
-        return TauPyModel(model=npz_path)
+    # a60: never reuse a cached model. After a crash the restarted chain proposes
+    # new parameters at the same step number, so a cached file belongs to a
+    # different model (and may be the one that crashed TauP).
+    for _p in (npz_path, nd_path):
+        if os.path.exists(_p):
+            os.remove(_p)
  
     z, Vp, Vs, rho = prof['z_km'], prof['Vp'], prof['Vs'], prof['rho']
     if not (np.all(np.isfinite(z)) and np.all(np.isfinite(Vp))
@@ -1646,7 +1711,8 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
         tt_misfit += EVENT_FAIL*(n_ev_expected - tt_n_ev)
  
     solidus_penalty = compute_solidus_penalty(prof, params) if params else 0.0
-    total = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma + ric_sigma + fesi_sigma
+    # a53: Fe/Si removed from the likelihood (still computed and stored as a prediction)
+    total = tt_misfit + solidus_penalty + mass_sigma + moi_sigma + grav_sigma + ric_sigma
     if not np.isfinite(total):
         total = 999.0
  
@@ -1727,10 +1793,15 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
 
     # ── Fe/Si budget(a42C)────────────────────────────────────────────────
     # 矽酸鹽 formula unit 質量 (g/mol);Fe 取代 Mg 使單位變重
+    # a53: Fe/Si is a posterior prediction only (not in the misfit).
+    # Mantle stoichiometry read from _MG_FE_TOTAL / _COMP_FIXED (was hard-coded YM20),
+    # BML as (Mg,Fe)2SiO4, consistent with its phase equilibrium and liquid EoS.
     def _sil_molmass(mg):
-        return (5.16834*(mg*40.304 + (1-mg)*71.844) + 4.01931*60.084
-                + 0.27259*56.077 + 0.37376/2*101.961
-                + 0.10105/2*61.979 + 0.06146/2*151.990)
+        return (_MG_FE_TOTAL*(mg*40.304 + (1-mg)*71.844) + _COMP_FIXED['Si']*60.084
+                + _COMP_FIXED['Ca']*56.077 + _COMP_FIXED['Al']/2*101.961
+                + _COMP_FIXED['Na']/2*61.979 + _COMP_FIXED['Cr']/2*151.990)
+    def _ol_molmass(mg):
+        return 2.0*(mg*40.304 + (1-mg)*71.844) + 60.084
     _r = (MARS_RADIUS - prof['z_km'])*1e3
     def _shell_mass(mask):
         r  = _r[mask][::-1]                    # 由內往外
@@ -1742,11 +1813,11 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
     M_bml = _shell_mass(prof['m_bml'])
     M_cor = _shell_mass(prof['m_core'])
     n_man = M_man*1e3/_sil_molmass(params['Mg#'])            # formula-unit mol
-    n_bml = M_bml*1e3/_sil_molmass(params['Mg#_bulk_bml'])
-    fe_sil_kg = (n_man*(1-params['Mg#'])
-               + n_bml*(1-params['Mg#_bulk_bml']))*5.16834*55.845e-3
+    n_bml = M_bml*1e3/_ol_molmass(params['Mg#_bulk_bml'])  # olivine formula units
+    fe_sil_kg = (n_man*(1-params['Mg#'])*_MG_FE_TOTAL
+               + n_bml*(1-params['Mg#_bulk_bml'])*2.0)*55.845e-3
     fe_cor_kg = M_cor*(1-params['w_S'])        # Fe-S 二元;核 Ni 併入 Fe(WD94 同慣例)
-    si_kg     = (n_man + n_bml)*4.01931*28.0855e-3   # 核無 Si
+    si_kg     = (n_man*_COMP_FIXED['Si'] + n_bml*1.0)*28.0855e-3   # 核無 Si
     fesi_pred  = (fe_sil_kg + fe_cor_kg)/si_kg
     fesi_sigma = abs(fesi_pred - FESI_OBS)/FESI_SIG
     print(f"  geochem: Fe/Si={fesi_pred:.3f}  fesi_sig={fesi_sigma:.2f}s")
@@ -1763,6 +1834,9 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
         grav_sigma=grav_sigma, ric_sigma=ric_sigma, fesi_sigma=fesi_sigma)
  
     components.update({
+        'T_solidus_bml':   bml['T_solidus'],            # a53
+        'T_liquidus_bml':  bml['T_liquidus'],
+        'phase_branch':    bml['phase'],
         'Ra':              bml['Ra'],
         'thermal_state':   bml['thermal_state'],
         'h_solid_km':      bml['h_solid_km'],
@@ -1820,6 +1894,22 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
     os.makedirs(chain_dir, exist_ok=True)
 
     samuel_cache = _samuel_cache
+
+    # a53: record every constant that defines this run
+    cfg_file = os.path.join(chain_dir, "config.json")
+    if not os.path.exists(cfg_file):
+        cfg = dict(script=os.path.basename(__file__), comp=_COMP_NAME,
+                   MG_FE_TOTAL=_MG_FE_TOTAL, COMP_FIXED=_COMP_FIXED,
+                   PRIOR=PRIOR, STEP=STEP, route=CF.ROUTE if hasattr(CF, 'ROUTE') else None,
+                   FA_SLOPE=_FA_SLOPE, DELTA_SHIFT=_DELTA_SHIFT, RAW_SOL_REF=_RAW_SOL_REF,
+                   XL_TIE_MODEL=_XL_TIE_MODEL, PIERRU_TIE=_PIERRU_TIE,
+                   W_BETA=_W_BETA, W_GAMMA=_W_GAMMA, FO_EOS=_FO, FA_EOS=_FA,
+                   RES_CAP=RES_CAP, MISS_PENALTY=MISS_PENALTY, EVENT_FAIL=EVENT_FAIL,
+                   MASS_SIGMA=MARS_MASS_SIGMA, MOI_SIGMA=MOI_SIGMA, GRAV_SCALE=GRAV_SCALE,
+                   SOLIDUS_SIGMA=SOLIDUS_SIGMA, SOLIDUS_CAP=SOLIDUS_CAP, RA_C=_RA_C,
+                   K_SOLID=K_SOLID, fesi_in_likelihood=False, created=datetime.now().isoformat())
+        with open(cfg_file, 'w') as f:
+            json.dump(cfg, f, indent=1, default=str)
 
     current = (start_params or START_PARAMS).copy()
 
@@ -1972,6 +2062,8 @@ if __name__ == "__main__":
     parser.add_argument('--random_start', action='store_true')
     parser.add_argument('--start',        type=str,  default=None)
     parser.add_argument('--scan_R', action='store_true')
+    parser.add_argument('--comp', default='YM20', choices=['YM20', 'TA', 'EH45'],
+                        help='bulk composition (parsed at import; listed here for --help)')
     parser.add_argument('--route', default='B', choices=['A', 'B'],
                         help='core EoS route: A = all-Liu (Gamma mixing), '
                              'B = Liu Fe + Sakai FeS (Margules)')
@@ -2001,7 +2093,7 @@ if __name__ == "__main__":
         if os.path.exists(_cf) and os.path.getsize(_cf) > 0:
             raise SystemExit(f"{_cf} exists: --random_start would be overridden by "
                              f"resume. Remove it or use a different --prefix.")
-        rng_init     = np.random.default_rng(args.chain)
+        rng_init     = np.random.default_rng([args.chain, 60])
         start_params = {k: float(rng_init.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
         print(f"random_start: {start_params}")
 

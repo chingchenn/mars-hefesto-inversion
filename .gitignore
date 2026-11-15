@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 __pycache__/
 *.pyc
 *.log
@@ -6,7 +5,7 @@ runs/
 fort.*
 *.png
 *nd
-=======
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -214,7 +213,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
->>>>>>> df676929b46696e88c0b9e5d939166b05aa4561f
 
 # machine-specific paths (each machine keeps its own copy)
 mars_config.py
+
+# non-code outputs (this folder is Python only; figures go to FIG_DIR)
+*.pdf
+*.npz
+*.af
+*.af~lock~
+*.bak
+*.xlsx
+*.html
+.DS_Store
+start_*/

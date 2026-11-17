@@ -37,7 +37,10 @@ Decomposition cases (YM20, swap one thing at a time against a64)
 Not tested here: SLB21 vs our nGibbs (cannot swap), their crust (67 km inverted;
 ours is the fixed Samuel 0-100 km column), their deep TBL above the BML.
 
-Run on beno3 (nGibbs).  python 78.drilleau_mantle_scs.py
+Run on beno3 (nGibbs), one process per case, then merge:
+  for i in 0 1 2 3 4 5 6 7; do CASE_SEL=$i nohup python 78.drilleau_mantle_scs.py > 78_$i.log 2>&1 & done
+  MERGE=1 python 78.drilleau_mantle_scs.py        # table + figure from 78_case*.npz
+Without CASE_SEL or MERGE all cases run serially (~3 h).
 """
 
 import os, sys, json, glob
@@ -66,6 +69,9 @@ FS       = 14
 SAVE     = True
 OUT_DIR  = os.path.dirname(os.path.abspath(__file__))   # beno3 mars_config has no FIG_DIR
 
+CASE_SEL = os.environ.get('CASE_SEL')       # run one case (index into CASES)
+MERGE    = os.environ.get('MERGE') == '1'   # only read 78_case*.npz, print, plot
+
 # a64 medians are read from the chains; fill these to skip the chain read
 OURS_OVERRIDE = None    # e.g. dict(T_lit=1600., P_lit=3.7, **{'Mg#': 0.80}, T_core=2400., w_S=0.15)
 
@@ -89,7 +95,9 @@ plt.rcParams['font.family'] = 'DejaVu Sans'
 # ══════════════════════════════════════════════════════════════════════════
 # a64 posterior medians
 # ══════════════════════════════════════════════════════════════════════════
-if OURS_OVERRIDE is None:
+if MERGE:
+    OURS = {}
+elif OURS_OVERRIDE is None:
     samples = []
     for d in sorted(glob.glob(os.path.join(CHAIN_DIR, PREFIX + '_*'))):
         path = os.path.join(d, 'chain.jsonl')
@@ -122,9 +130,10 @@ print('a64 medians: ' + '  '.join(f'{k}={v:.4g}' for k, v in OURS.items()))
 # ══════════════════════════════════════════════════════════════════════════
 # forward modules, one per bulk composition (composition is fixed at import)
 # ══════════════════════════════════════════════════════════════════════════
+RUN = [] if MERGE else [i for i in range(len(CASES)) if CASE_SEL is None or i == int(CASE_SEL)]
 sys.argv = [sys.argv[0]]                 # the forward file parses --comp from argv
 MODS = {}
-for comp in sorted(set(c[1] for c in CASES)):
+for comp in sorted(set(CASES[i][1] for i in RUN)):
     os.environ['MARS_COMP'] = comp
     spec = importlib.util.spec_from_file_location(f'fwd_{comp}', FORWARD_FILE)
     mod  = importlib.util.module_from_spec(spec)
@@ -132,17 +141,20 @@ for comp in sorted(set(c[1] for c in CASES)):
     MODS[comp] = mod
     print(f'loaded {FORWARD_FILE} as {comp}')
 
-M0 = MODS['YM20']
 # ScS-S observations: (event, delta, depth, t_obs, sigma)
-SCS = [(ev, o['delta'], o.get('depth', 10.0), o['ScS-S'][0], o['ScS-S'][1])
-       for ev, o in M0.SAMUEL_DATA.items() if 'ScS-S' in o]
-print(f'{len(SCS)} ScS-S observations')
+SCS = []
+if RUN:
+    M0 = MODS[CASES[RUN[0]][1]]
+    SCS = [(ev, o['delta'], o.get('depth', 10.0), o['ScS-S'][0], o['ScS-S'][1])
+           for ev, o in M0.SAMUEL_DATA.items() if 'ScS-S' in o]
+    print(f'{len(SCS)} ScS-S observations')
 
 # ══════════════════════════════════════════════════════════════════════════
 # scan
 # ══════════════════════════════════════════════════════════════════════════
 res = {}
-for ic, (lab, comp, Tsrc, zlit, mgsrc, R_their) in enumerate(CASES):
+for ic in RUN:
+    lab, comp, Tsrc, zlit, mgsrc, R_their = CASES[ic]
     M = MODS[comp]
     T_lit = OURS['T_lit'] if Tsrc == 'ours' else Tsrc
     P_lit = OURS['P_lit'] if zlit is None else float(M.pressure_mars(zlit))
@@ -203,9 +215,26 @@ for ic, (lab, comp, Tsrc, zlit, mgsrc, R_their) in enumerate(CASES):
                   & (np.sign(bias[:-1]) != np.sign(bias[1:])))[0]
     R_zero = (R_GRID[i0[0]] - bias[i0[0]] * (R_GRID[i0[0] + 1] - R_GRID[i0[0]])
               / (bias[i0[0] + 1] - bias[i0[0]])) if len(i0) else np.nan
-    res[lab] = dict(L1=L1, bias=bias, tt=tt, R_best=R_GRID[i_best], R_zero=R_zero,
+    res[lab] = dict(ic=ic, L1=L1, bias=bias, tt=tt, R_best=R_GRID[i_best], R_zero=R_zero,
                     Tp=Tp, Vs_avg=Vs_avg, T_lit=T_lit, P_lit=P_lit, Mg=Mg, comp=comp,
                     R_their=R_their, z=zz[mm], Vs=keep['Vs'][mm], T=keep['T_K'][mm])
+    np.savez(os.path.join(OUT_DIR, f'78_case{ic}.npz'), label=lab, **res[lab])
+    print(f'saved {OUT_DIR}/78_case{ic}.npz')
+
+# merge: read every per-case file
+if MERGE:
+    for ic in range(len(CASES)):
+        fn = os.path.join(OUT_DIR, f'78_case{ic}.npz')
+        if not os.path.exists(fn):
+            print(f'  missing {fn}')
+            continue
+        d = np.load(fn)
+        r = {k: d[k] for k in d.files if k != 'label'}
+        for k in ('ic', 'R_best', 'R_zero', 'Tp', 'Vs_avg', 'T_lit', 'P_lit', 'Mg', 'R_their'):
+            r[k] = float(r[k])
+        r['ic'] = int(r['ic'])
+        r['comp'] = str(r['comp'])
+        res[str(d['label'])] = r
 
 # ══════════════════════════════════════════════════════════════════════════
 # summary (terminal)
@@ -220,6 +249,9 @@ for lab, r in res.items():
           f'{r["R_their"]:8.0f} {r["tt"][ib]:8.2f}')
 print('R_best  = argmin of the ScS-S L1 misfit on the grid')
 print('R_bias0 = R where the mean ScS-S residual crosses zero (linear interpolation)')
+
+if CASE_SEL is not None:
+    sys.exit(0)                          # single case: no merged file, no figure
 
 if SAVE:
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -237,8 +269,8 @@ if SAVE:
 # figure: (a) ScS-S mean residual vs R, (b) mantle Vs, (c) mantle T
 # ══════════════════════════════════════════════════════════════════════════
 fig, ax = plt.subplots(1, 3, figsize=(18, 6.5))
-for ic, (lab, r) in enumerate(res.items()):
-    c, ls = CASE_COLOR[ic], CASE_LS[ic]
+for lab, r in res.items():
+    c, ls = CASE_COLOR[r['ic']], CASE_LS[r['ic']]
     ax[0].plot(R_GRID, r['bias'], color=c, ls=ls, lw=2, label=lab)
     if np.isfinite(r['R_their']):
         ax[0].axvline(r['R_their'], color=c, ls=ls, lw=1, alpha=0.6)

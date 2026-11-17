@@ -64,7 +64,7 @@ P_TP     = 0.01                              # GPa, isentrope foot used for Tp
 Z_VS_AVG = (600.0, 1500.0)                   # km depth, mantle Vs average window
 FS       = 14
 SAVE     = True
-OUT_DIR  = cfg.FIG_DIR
+OUT_DIR  = os.path.dirname(os.path.abspath(__file__))   # beno3 mars_config has no FIG_DIR
 
 # a64 medians are read from the chains; fill these to skip the chain read
 OURS_OVERRIDE = None    # e.g. dict(T_lit=1600., P_lit=3.7, **{'Mg#': 0.80}, T_core=2400., w_S=0.15)

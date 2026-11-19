@@ -8,7 +8,8 @@
 #   - chain.jsonl stores the chain STATE at every step; a rejected step repeats the
 #     previous state. Every record is kept, repeats included. Never filter to accepted.
 #   - per chain: drop the last DROP_LAST lines (may be half written), skip chains with
-#     fewer than MIN_STEPS records, then discard the first BURNIN_FRAC of the records.
+#     fewer than MIN_STEPS records, then discard the burn-in: burnin < 1 is a fraction
+#     of the records, burnin >= 1 is a number of records (per chain, not the 'step' field).
 #   - BML state: solid if h_liquid < 1 km, molten if h_solid < 1 km, layered otherwise,
 #     'fail' if both < 1 km (or missing).
 #   - profiles exist only at accepted steps. Record i uses profile_s{profile_step[i]:05d}.npz,
@@ -28,6 +29,8 @@ H_STATE = 1.0          # km, state threshold
 
 def load_run(prefix, exclude=(), burnin=0.4, min_steps=400, drop_last=1,
              chain_dir=MCMC_DIR, verbose=True):
+    # burnin < 1  : fraction of each chain's records to discard (0.4 = first 40%)
+    # burnin >= 1 : number of records to discard per chain (e.g. 2000)
     # ── read every chain folder prefix_* ────────────────────────────────────────
     chains = []
     for d in sorted(glob.glob(os.path.join(chain_dir, prefix + '_*'))):
@@ -56,7 +59,9 @@ def load_run(prefix, exclude=(), burnin=0.4, min_steps=400, drop_last=1,
     # ── burn-in per chain; profile step = last accepted step <= i ───────────────
     keep, cid, cdir, pstep = [], [], [], []
     for c, (d, recs) in enumerate(chains):
-        b = int(len(recs) * burnin)
+        b = int(len(recs) * burnin) if burnin < 1 else int(burnin)
+        if b >= len(recs) and verbose:
+            print(f'  {os.path.basename(d):<24s} all {len(recs)} records inside burn-in')
         last_acc = -1                       # -1 = no accepted step yet, no profile
         for i, r in enumerate(recs):
             if r.get('accepted'):
@@ -64,7 +69,8 @@ def load_run(prefix, exclude=(), burnin=0.4, min_steps=400, drop_last=1,
             if i >= b:
                 keep.append(r); cid.append(c); cdir.append(d); pstep.append(last_acc)
     if verbose:
-        print(f'  {prefix}: {len(chains)} chains, {len(keep)} records after burn-in {burnin}')
+        unit = 'fraction' if burnin < 1 else 'records'
+        print(f'  {prefix}: {len(chains)} chains, {len(keep)} records after burn-in {burnin} ({unit})')
 
     # ── to arrays: params, then every scalar top-level field (dict fields skipped) ─
     post = {}

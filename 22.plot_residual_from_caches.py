@@ -9,13 +9,16 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import importlib.util
+from mars_config import MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 spec = importlib.util.spec_from_file_location(
     "mcmc",
-    "/home/jcchen2/mars-hefesto-inversion/15.mcmc_withBML_MOI.py")
+    f"{HERE}/15.mcmc_withBML_MOI.py")
 mcmc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mcmc)
 
-os.chdir('/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc')
+os.chdir(MCMC_DIR)
 mcmc.load_gravity_profile()
 khan_cache = mcmc.compute_khan_median()
 
@@ -329,8 +332,8 @@ plt.suptitle(
 
 plt.tight_layout()
 
-plt.savefig(
-    'residual_from_cache.png',
+if SAVE_FIG: plt.savefig(
+    os.path.join(FIG_DIR, 'residual_from_cache.png'),
     dpi=180,
     bbox_inches='tight'
 )

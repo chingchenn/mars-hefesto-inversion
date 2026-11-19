@@ -8,15 +8,18 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from mars_config import FIG_DIR, MCMC_DIR, RUN_BASE
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ============================================================
 # config
 # ============================================================
-MCMC_BASE       = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
+MCMC_BASE       = MCMC_DIR
 HEFESTO_PREFIX  = 'chain_a23'
 N_BEST          = 20
-NGIBBS_MODULE   = '/home/jcchen2/mars-hefesto-inversion/57.mcmc_nGibbs_Mars.py'
-OUT_DIR         = '/net/beno3/data1/jcchen2/mars-hefesto-runs/compare_a23_ngibbs'
+NGIBBS_MODULE   = f'{HERE}/57.mcmc_nGibbs_Mars.py'
+OUT_DIR         = f'{RUN_BASE}/compare_a23_ngibbs'
 RUN_DIR         = os.path.join(OUT_DIR, 'runs')
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -99,7 +102,7 @@ for k, r in enumerate(top):
     fig.suptitle(f"rank {k}   HeFESTo={r['misfit']:.3f}   nGibbs={misfit:.3f}   "
                  f"T_lit={params['T_lit']:.0f}K  Mg#={params['Mg#']:.3f}  "
                  f"BML={params['BML_thickness']:.0f}km", fontsize=14)
-    out = os.path.join(OUT_DIR, f'profile_rank{k:02d}.png')
-    fig.savefig(out, dpi=180, bbox_inches='tight')
+    out = os.path.join(FIG_DIR, f'profile_rank{k:02d}.png')
+    if SAVE_FIG: fig.savefig(out, dpi=180, bbox_inches='tight')
     plt.close(fig)
     print(f"  saved {out}")

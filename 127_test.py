@@ -24,24 +24,18 @@
 import os, sys, json, glob
 import importlib.util
 import numpy as np
+from mars_config import FIG_DIR, MCMC_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ══════════════════════════════════════════════════════════════════════════
 # 路徑:自動判斷跑在 beno3 還是本機 Mac
 # 第一個存在的候選就採用,解析結果會 print 出來。
 # 猜錯就直接改 CHAIN_CANDS / PHASE_CANDS 的第一項。
 # ══════════════════════════════════════════════════════════════════════════
-CHAIN_CANDS = [
-    '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc',
-    '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain',
-]
-PHASE_CANDS = [
-    os.path.expanduser('~/mars-hefesto-inversion'),
-    '/net/beno3/data1/jcchen2/mars-hefesto-inversion',
-    '/net/beno3/data1/jcchen2/mars-hefesto-runs',
-    '/Users/chingchen/Desktop/HeFESTo/python',
-]
+CHAIN_CANDS = [MCMC_DIR]
+PHASE_CANDS = [HERE]
 PHASE_GLOB = '70*mcmc_core_nGibbs.py'      # 同時吃 '70.' 與 '70_' 兩種命名
-OUT_DIR    = '.'                            # 圖存在當前目錄
+OUT_DIR    = FIG_DIR
 
 PREFIX  = 'chain_a52B'
 EXCLUDE = ['chain_a52B_04']
@@ -51,7 +45,7 @@ DROP_LAST   = 1
 MIN_STEPS   = 5
 H_STATE_TOL = 1.0
 STATE_MIN_N = 50
-SAVE        = True
+SAVE_FIG        = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 FS   = 14
 TICK = 14
 
@@ -262,7 +256,7 @@ if TOGGLE['TX']:
     ax.tick_params(labelsize=TICK)
     ax.legend(loc='lower right', fontsize=FS - 4, framealpha=0.92)
     fig.tight_layout()
-    if SAVE:
+    if SAVE_FIG:
         fig.savefig(os.path.join(OUT_DIR, '127_phase_TX.png'), dpi=200)
         print('saved 127_phase_TX.png')
 
@@ -308,7 +302,7 @@ if TOGGLE['TP']:
     ax.legend(loc='lower right', fontsize=FS - 4, framealpha=0.92)
     ax.set_title('solid line: solidus    dashed: liquidus', fontsize=FS - 1)
     fig.tight_layout()
-    if SAVE:
+    if SAVE_FIG:
         fig.savefig(os.path.join(OUT_DIR, '127_phase_TP.png'), dpi=200)
         print('saved 127_phase_TP.png')
 

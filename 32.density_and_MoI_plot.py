@@ -20,12 +20,13 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
+from mars_config import FIG_DIR, MCMC_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # =============================================================================
 # Config
 # =============================================================================
-MCMC_DIR    = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
-OUT_DIR     = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
+OUT_DIR     = FIG_DIR
 
 PREFIX      = 'chain_a07'
 BURNIN_FRAC = 0.1
@@ -188,7 +189,7 @@ plt.suptitle(
 plt.tight_layout()
 
 outpath = os.path.join(OUT_DIR, f'mass_moi_distribution_{PREFIX}.png')
-plt.savefig(outpath, dpi=180, bbox_inches='tight')
+if SAVE_FIG: plt.savefig(outpath, dpi=180, bbox_inches='tight')
 plt.close()
 print(f"\nSaved: {outpath}")
 

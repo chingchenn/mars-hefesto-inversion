@@ -3,6 +3,8 @@ import types
 import numpy as np
 from scipy.optimize import brentq, fsolve
 import matplotlib.pyplot as plt
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ── config ────────────────────────────────────────────────────────────────────
 FORWARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '26fall_main_mcmc.py')
@@ -91,5 +93,5 @@ for k, dH in enumerate(CASES):
 ax[0].set_ylabel('T (K)', fontsize=14)
 ax[0].legend(loc='lower right', fontsize=10)
 fig.tight_layout()
-fig.savefig('137_pierru_19GPa_compare.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '137_pierru_19GPa_compare.png'), dpi=200)
 print("\nsaved 137_pierru_19GPa_compare.png")

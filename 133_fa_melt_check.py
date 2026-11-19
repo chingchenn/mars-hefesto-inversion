@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 # -*- coding: utf-8 -*-
 # 133_fa_melt_check.py
 # Diagnose the Fa end-member melting curve used in the BML phase diagram.
@@ -21,6 +22,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve, brentq, curve_fit
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
@@ -119,5 +122,5 @@ ax.tick_params(labelsize=14)
 ax.legend(fontsize=10, loc='lower right')
 
 fig.tight_layout()
-fig.savefig('133_fa_melt_check.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '133_fa_melt_check.png'), dpi=150)
 plt.show()

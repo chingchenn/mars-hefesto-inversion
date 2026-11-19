@@ -21,9 +21,11 @@ import glob
 import importlib.util
 import numpy as np
 from scipy.interpolate import interp1d
+from mars_config import KHAN_MODEL_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
-MCMC_PY = '/home/jcchen2/mars-hefesto-inversion/82.mcmc_core_nGibbs_wideMoI.py'
-LSL_DIR = '/net/beno3/data1/jcchen2/Mars_Khan_2023/LSL_Models'
+MCMC_PY = f'{HERE}/82.mcmc_core_nGibbs_wideMoI.py'
+LSL_DIR = KHAN_MODEL_DIR
 R_TEST  = 1600.0        # 89 的 khan 在此同時 mass 0.06 / moi 0.54
 QUANT   = [25, 40, 50, 60, 75]
 

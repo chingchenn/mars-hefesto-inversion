@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 import torch
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # config
@@ -37,7 +38,7 @@ INCLUDE_SOLID_BML = True
 LABEL_THRESH      = 6.0      # %, minimum stable width to get an inline label
 OL_WAD_THRESH     = 0.01     # mass fraction, wadsleyite onset
 
-SAVE = True
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 FS   = 14
 TICK = 14
 plt.rcParams['font.family'] = 'DejaVu Sans'
@@ -86,7 +87,6 @@ M = importlib.util.module_from_spec(spec)
 sys.modules['mmain'] = M
 spec.loader.exec_module(M)
 M.CF.configure(route=ROUTE, verbose=False)
-MCMC_DIR = getattr(M, 'MCMC_DIR', None) or '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
 print('MAIN_PY  =', MAIN_PY)
 print('MCMC_DIR =', MCMC_DIR)
 print('_MG_FE_TOTAL =', M._MG_FE_TOTAL, '  _COMP_FIXED =', M._COMP_FIXED)
@@ -344,14 +344,14 @@ for i_pick, (lab, r) in enumerate(picks):
 
     fig.tight_layout()
     fname = f'132_assemblage_{TAG}_{i_pick+1}_{lab}_{chain_name[6:]}_s{step}.png'
-    if SAVE:
-        fig.savefig(fname, dpi=200, bbox_inches='tight')
+    if SAVE_FIG:
+        fig.savefig(os.path.join(FIG_DIR, fname), dpi=200, bbox_inches='tight')
     print('  saved', fname)
     plt.close(fig)
 
 fig_all.tight_layout()
-if SAVE:
-    fig_all.savefig(f'132_assemblage_{TAG}_all.png', dpi=200, bbox_inches='tight')
+if SAVE_FIG:
+    fig_all.savefig(os.path.join(FIG_DIR, f'132_assemblage_{TAG}_all.png'), dpi=200, bbox_inches='tight')
 print(f'\nsaved 132_assemblage_{TAG}_all.png')
 
 # ── summary table ────────────────────────────────────────────────────────

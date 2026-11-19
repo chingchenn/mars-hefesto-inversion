@@ -1,6 +1,7 @@
 import json, glob, numpy as np
+from mars_config import MCMC_DIR
 T = []
-for fn in glob.glob('/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc/chain_a36*/chain.jsonl'):
+for fn in glob.glob(f'{MCMC_DIR}/chain_a36*/chain.jsonl'):
     for line in open(fn):
         line = line.strip()
         if not line: continue

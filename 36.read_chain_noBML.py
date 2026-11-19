@@ -22,6 +22,8 @@ import glob
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ============================================================
 # Parameter definitions (labels and priors, looked up after auto-detection)
@@ -268,7 +270,7 @@ def plot_trace(chains, params, param_labels, prior, prefix, output_dir):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_01_trace_plots.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  saved: {out}")
 
@@ -304,7 +306,7 @@ def plot_autocorr(trimmed_chains, params, param_labels, prefix, output_dir):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_02_autocorrelation.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  saved: {out}")
 
@@ -370,7 +372,7 @@ def plot_marginal_posteriors(samples, params, param_labels, prior, prefix, outpu
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_03_marginal_posteriors.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  saved: {out}")
 
@@ -425,7 +427,7 @@ def plot_corner(samples, params, param_labels, prior, prefix, output_dir, max_sa
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_04_corner_plot.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  saved: {out}")
 
@@ -469,7 +471,7 @@ def plot_misfit_components(trimmed_chains, prefix, output_dir):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_05_misfit_components.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  saved: {out}")
 
@@ -507,7 +509,7 @@ def plot_misfit_vs_params(samples, misfits, params, param_labels, prior, prefix,
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_06_misfit_vs_params.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"  saved: {out}")
 
@@ -567,7 +569,7 @@ def main():
                         help='Output directory for figures (default: same as mcmc_dir)')
     args = parser.parse_args()
 
-    output_dir = args.output_dir or args.mcmc_dir
+    output_dir = args.output_dir or FIG_DIR
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 55)

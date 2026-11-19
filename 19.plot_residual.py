@@ -6,13 +6,16 @@ import matplotlib.pyplot as plt
 
 # 載入你的 mcmc 模組（跟舊腳本一樣）
 import importlib.util
+from mars_config import MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 spec = importlib.util.spec_from_file_location(
     "mcmc",
-    "/home/jcchen2/mars-hefesto-inversion/15.mcmc_withBML_MOI.py")
+    f"{HERE}/15.mcmc_withBML_MOI.py")
 mcmc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mcmc)
 
-os.chdir('/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc')
+os.chdir(MCMC_DIR)
 os.makedirs('cache', exist_ok=True)
 
 mcmc.load_gravity_profile()
@@ -25,7 +28,7 @@ BURN_IN_STEP = 200     # 前幾步不算
 phases_to_plot = ['S-P', 'PP-P', 'SS-S', 'ScS-S']
 SIGMA_dict = mcmc.SIGMA   # 用來 normalize
 all_steps = []
-for f in sorted(glob.glob('/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc/chain_a04*/chain.json')):
+for f in sorted(glob.glob(f'{MCMC_DIR}/chain_a04*/chain.json')):
     with open(f) as fp:
         try:
             chain = json.load(fp)
@@ -170,5 +173,5 @@ plt.suptitle(
     f'T_bml={best["params"]["T_bml"]:.0f}K',
     fontsize=11)
 plt.tight_layout()
-plt.savefig('residual_vs_distance.png', dpi=150, bbox_inches='tight')
+if SAVE_FIG: plt.savefig(os.path.join(FIG_DIR, 'residual_vs_distance.png'), dpi=150, bbox_inches='tight')
 print("Saved: residual_vs_distance.png")

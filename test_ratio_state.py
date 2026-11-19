@@ -1,12 +1,13 @@
 import importlib.util, numpy as np, time
 import os
 from scipy.interpolate import RegularGridInterpolator
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 spec = importlib.util.spec_from_file_location("m59",
-    "/home/jcchen2/mars-hefesto-inversion/59.mcmc_nGibbs_Mars_a25.py")
+    f"{HERE}/59.mcmc_nGibbs_Mars_a25.py")
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 print("PRIOR check:", m.PRIOR['T_core'], m.PRIOR['Mg#_bulk_bml'], m.PRIOR['BML_thickness'])
-TABLE = "/home/jcchen2/mars-hefesto-inversion/bml_phase_table_prior_a34_61x201.npz"
+TABLE = f"{HERE}/bml_phase_table_prior_a34_61x201.npz"
 # ── 步驟 1:在 (P, Mg) 網格上算 T_sol / T_liq 表(唯一慢的部分)──
 D_lo, D_hi = m.PRIOR['BML_thickness']
 P_lo = float(m.pressure_mars(m.TRUE_CMB_DEPTH - 0.5*D_hi))

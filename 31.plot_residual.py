@@ -20,13 +20,14 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from obspy.taup import TauPyModel
+from mars_config import DATA_BASE, FIG_DIR, MCMC_DIR, TAUP_WORK_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ============================================================
 # config
-MCMC_DIR  = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
-TAUP_DIR  = '/net/beno3/data1/jcchen2/mars-hefesto-runs/taup_models'
-OUT_DIR   = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
-CSV_PATH  = '/net/beno3/data1/jcchen2/Mars_Khan_2023/event_time.csv'
+TAUP_DIR  = TAUP_WORK_DIR
+OUT_DIR   = FIG_DIR
+CSV_PATH  = f'{DATA_BASE}/Mars_Khan_2023/event_time.csv'
 
 PREFIX      = 'chain_a07'
 BURNIN_FRAC = 0.1
@@ -354,6 +355,6 @@ plt.suptitle(
 plt.tight_layout()
 
 outpath = os.path.join(OUT_DIR, f'fig6ab_style_{PREFIX}.png')
-plt.savefig(outpath, dpi=180, bbox_inches='tight')
+if SAVE_FIG: plt.savefig(outpath, dpi=180, bbox_inches='tight')
 plt.close()
 print(f"\nSaved: {outpath}")

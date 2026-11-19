@@ -2,9 +2,12 @@ import importlib.util, sys, os, time
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ── config ────────────────────────────────────────────────────────────────────
-SRC_DIR       = "/home/jcchen2/mars-hefesto-inversion"
+SRC_DIR       = HERE
 MODULE_PATH   = f"{SRC_DIR}/70.mcmc_core_nGibbs.py"
 ROUTE         = "A"                     # 'A' = all-Liu Gamma, 'B' = Liu+Sakai Margules
 
@@ -19,7 +22,7 @@ SEED          = 0
 
 TABLE_STRUCT  = f"{SRC_DIR}/struct_table_prior_a36{ROUTE}.npz"
 OUT_SAMPLES   = f"{SRC_DIR}/prior_predictive_a36{ROUTE}.npz"
-OUT_FIG       = f"{SRC_DIR}/prior_predictive_a36{ROUTE}.png"
+OUT_FIG       = f"{FIG_DIR}/prior_predictive_a36{ROUTE}.png"
 
 # ── load a36 module ───────────────────────────────────────────────────────────
 sys.path.insert(0, SRC_DIR)             # 70.py 內有 `import core_fes as CF`
@@ -201,5 +204,5 @@ ax[2].set_ylabel('prior fraction'); ax[2].tick_params(labelsize=14)
 for i, f in enumerate(frac):
     ax[2].text(i, f + 0.01, f'{100*f:.1f}%', ha='center', fontsize=13)
 
-fig.tight_layout(); fig.savefig(OUT_FIG, dpi=150)
+if SAVE_FIG: fig.tight_layout(); fig.savefig(OUT_FIG, dpi=150)
 print(f"saved -> {OUT_FIG}")

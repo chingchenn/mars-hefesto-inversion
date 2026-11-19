@@ -22,16 +22,19 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from mars_config import MCMC_DIR, RUN_BASE, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 
 # ============================================================
 # 0. Import two MCMC modules
 # ============================================================
 
-BML_MODULE_PATH = "/home/jcchen2/mars-hefesto-inversion/15.mcmc_withBML_MOI.py"
-NOBML_MODULE_PATH = "/home/jcchen2/mars-hefesto-inversion/13.mcmc_entropy_MoI.py"
+BML_MODULE_PATH = f"{HERE}/15.mcmc_withBML_MOI.py"
+NOBML_MODULE_PATH = f"{HERE}/13.mcmc_entropy_MoI.py"
 
-WORKDIR = "/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc"
+WORKDIR = MCMC_DIR
 os.chdir(WORKDIR)
 
 
@@ -151,8 +154,7 @@ def build_nobml_predictions(best_no, khan_cache_no):
     params = best_no["params"]
 
     run_dir = (
-        "/net/beno3/data1/jcchen2/"
-        "mars-hefesto-runs/saved_models/best_noBML"
+        f"{RUN_BASE}/saved_models/best_noBML"
     )
 
     os.makedirs(run_dir, exist_ok=True)
@@ -223,13 +225,11 @@ def build_bml_predictions(best_bml, khan_cache_bml):
     # ======================================================
 
     mantle_run_dir = (
-        "/net/beno3/data1/jcchen2/"
-        "mars-hefesto-runs/saved_models/best_BML"
+        f"{RUN_BASE}/saved_models/best_BML"
     )
 
     bml_run_dir = (
-        "/net/beno3/data1/jcchen2/"
-        "mars-hefesto-runs/saved_models/best_BML_layer"
+        f"{RUN_BASE}/saved_models/best_BML_layer"
     )
 
     os.makedirs(mantle_run_dir, exist_ok=True)
@@ -535,8 +535,8 @@ def main():
     )
 
     plt.tight_layout()
-    out = "travel_time_distance_BML_vs_noBML_v2.png"
-    plt.savefig(out, dpi=150, bbox_inches="tight")
+    out = f"{FIG_DIR}/travel_time_distance_BML_vs_noBML_v2.png"
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches="tight")
     print("=" * 70)
     print(f"Saved: {out}")
 

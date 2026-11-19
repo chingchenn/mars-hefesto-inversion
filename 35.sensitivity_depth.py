@@ -22,11 +22,14 @@ import matplotlib.colors as mcolors
 import importlib.util
 
 from obspy.taup import TauPyModel
+from mars_config import FIG_DIR, MCMC_DIR, TAUP_WORK_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ─────────────────────────────────────────────────
 # 載入 mcmc module（取 OBS_DATA 等設定）
 # ─────────────────────────────────────────────────
-MCMC_MODULE_PATH = "/home/jcchen2/mars-hefesto-inversion/21.mcmc_NPS.py"
+MCMC_MODULE_PATH = f"{HERE}/21.mcmc_NPS.py"
 
 spec = importlib.util.spec_from_file_location("mcmc", MCMC_MODULE_PATH)
 mcmc = importlib.util.module_from_spec(spec)
@@ -35,9 +38,8 @@ spec.loader.exec_module(mcmc)
 # ─────────────────────────────────────────────────
 # config
 # ─────────────────────────────────────────────────
-MCMC_DIR  = "/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc"
-TAUP_DIR  = "/net/beno3/data1/jcchen2/mars-hefesto-runs/taup_models"
-OUT_DIR   = "/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc/event_phase_summary"
+TAUP_DIR  = TAUP_WORK_DIR
+OUT_DIR   = f'{FIG_DIR}/event_phase_summary'
 os.makedirs(OUT_DIR, exist_ok=True)
 
 PREFIX      = "chain_a07"
@@ -485,7 +487,7 @@ def plot_event(event_name, best_models):
     # ── save
     plt.tight_layout()
     outpath = os.path.join(OUT_DIR, f"{event_name}_summary_deep_path.png")
-    plt.savefig(outpath, dpi=180, bbox_inches="tight")
+    if SAVE_FIG: plt.savefig(outpath, dpi=180, bbox_inches="tight")
     plt.close(fig)
     print(f"    Saved: {outpath}")
 

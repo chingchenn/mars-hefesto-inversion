@@ -18,6 +18,7 @@ import os, sys, glob, json, importlib.util
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # config
@@ -44,7 +45,7 @@ P_MAX    = None         # GPa; None -> down to P_cmb
 INCLUDE_SOLID_BML = True
 LABEL_THRESH = 6.0       # %, minimum stable width to get an inline label
 
-SAVE = True
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 FS   = 14
 TICK = 14
 plt.rcParams['font.family'] = 'DejaVu Sans'
@@ -105,7 +106,6 @@ M.CF.configure(route=ROUTE, verbose=False)
 
 # MCMC_DIR should come from 86's `from mars_config import *`; fall back to the
 # known beno3 path if that constant is missing or points somewhere else.
-MCMC_DIR = getattr(M, 'MCMC_DIR', None) or '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
 print('MCMC_DIR =', MCMC_DIR)
 
 def classify_state(h_sol, h_liq, tol=H_STATE_TOL):
@@ -332,8 +332,8 @@ h2, l2 = axT.get_legend_handles_labels()
 ax.legend(h2, l2, loc='lower right', fontsize=FS - 3, framealpha=0.9)
 
 fig.tight_layout()
-if SAVE:
-    fig.savefig('131_phase_assemblage_T.png', dpi=200, bbox_inches='tight')
+if SAVE_FIG:
+    fig.savefig(os.path.join(FIG_DIR, '131_phase_assemblage_T.png'), dpi=200, bbox_inches='tight')
 print('saved 131_phase_assemblage_T.png')
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -403,7 +403,7 @@ for a in axs:
     a.tick_params(labelsize=TICK)
 
 fig2.tight_layout()
-if SAVE:
-    fig2.savefig('131_assemblage_rho_velocity.png', dpi=200, bbox_inches='tight')
+if SAVE_FIG:
+    fig2.savefig(os.path.join(FIG_DIR, '131_assemblage_rho_velocity.png'), dpi=200, bbox_inches='tight')
 print('saved 131_assemblage_rho_velocity.png')
 plt.show()

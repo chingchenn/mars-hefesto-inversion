@@ -1,8 +1,10 @@
 import importlib.util, time
 import numpy as np
+import os
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
-MODULE = "/home/jcchen2/mars-hefesto-inversion/59.mcmc_nGibbs_Mars_a25.py"
-OUT    = "/home/jcchen2/mars-hefesto-inversion/tables_a31.npz"
+MODULE = f"{HERE}/59.mcmc_nGibbs_Mars_a25.py"
+OUT    = f"{HERE}/tables_a31.npz"
 
 N_P    = 15
 N_MGB  = 41

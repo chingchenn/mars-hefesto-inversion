@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 
 # ── config ────────────────────────────────────────────────────────────────────
 import os
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 FORWARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '26fall_main_mcmc.py')
 P_GRID  = [19.5, 21.0, 22.0, 23.0]                 # GPa, BML range
 MG_GRID = np.round(np.arange(0.20, 0.801, 0.05), 2)  # Mg#_bulk_bml prior range
@@ -148,7 +150,7 @@ for a, name in zip(ax, [r'$\Delta T_{sol}$ (K)', r'$\Delta T_{liq}$ (K)']):
     a.tick_params(labelsize=14)
 ax[0].legend(fontsize=9, loc='best')
 fig.tight_layout()
-fig.savefig('134_phase_param_sensitivity.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '134_phase_param_sensitivity.png'), dpi=200)
 print("\nsaved 134_phase_param_sensitivity.png")
 
 

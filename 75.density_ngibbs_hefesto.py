@@ -28,13 +28,15 @@ import os, sys, json, glob, re, shutil, subprocess
 import importlib.util
 import numpy as np
 import pandas as pd
+from mars_config import RUN_BASE
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ── config ────────────────────────────────────────────────────────────────────
-INV_DIR   = '/home/jcchen2/mars-hefesto-inversion'
+INV_DIR   = HERE
 SCRIPT_70 = os.path.join(INV_DIR, '70.mcmc_core_nGibbs.py')
 SCRIPT_50 = os.path.join(INV_DIR, '50.mcmc_main.py')      # 只讀文字,不 import
 
-RUNS      = '/net/beno3/data1/jcchen2/mars-hefesto-runs'
+RUNS      = RUN_BASE
 CHAIN_DIR = os.path.join(RUNS, 'mcmc', 'chain_a38B_00')
 WORK_DIR  = os.path.join(RUNS, 'hef_vs_ng')
 

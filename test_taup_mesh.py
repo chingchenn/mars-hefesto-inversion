@@ -19,8 +19,9 @@ import os
 import sys
 import importlib.util
 import numpy as np
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
-MCMC_PY   = '/home/jcchen2/mars-hefesto-inversion/82.mcmc_core_nGibbs_wideMoI.py'
+MCMC_PY   = f'{HERE}/82.mcmc_core_nGibbs_wideMoI.py'
 ROUTE     = 'B'
 TARGET_DS = 1.0       # 目標單步 misfit 變化。exp(-1) = 0.37,配上八維
 R_START   = 1620.0

@@ -16,10 +16,13 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ── 把你的mcmc模組加進path ─────────────────────────────────
-sys.path.insert(0, '/home/jcchen2/mars-hefesto-inversion')
+sys.path.insert(0, HERE)
 from config import HEFESTO_MAIN, PAR_DIR
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ── 測試參數 ───────────────────────────────────────────────
 TEST_PARAMS = {
@@ -473,7 +476,7 @@ else:
              ha='center', va='center', transform=ax2.transAxes,
              fontsize=12)
 
-out_fig = os.path.join(WORK_DIR, 'adiabat_comparison.png')
+out_fig = os.path.join(FIG_DIR, 'adiabat_comparison.png')
 plt.tight_layout()
-plt.savefig(out_fig, dpi=150, bbox_inches='tight')
+if SAVE_FIG: plt.savefig(out_fig, dpi=150, bbox_inches='tight')
 print(f"\n  Figure saved: {out_fig}")

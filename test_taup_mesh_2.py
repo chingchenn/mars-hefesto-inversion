@@ -1,10 +1,11 @@
 # 95.branch_diag.py
 import os, sys, importlib.util
 import numpy as np
+from mars_config import MCMC_DIR
 
 
 
-CHAIN_DIR = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
+CHAIN_DIR = MCMC_DIR
 
 import json
 recs = [json.loads(l) for l in open(f"{CHAIN_DIR}/chain_a47B_13/chain.jsonl")]

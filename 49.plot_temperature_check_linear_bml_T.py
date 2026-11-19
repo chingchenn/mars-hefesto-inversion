@@ -11,11 +11,13 @@ import json, glob, sys, os
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+from mars_config import MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ── 路徑 ─────────────────────────────────────────────────────
 chain_dirs = sys.argv[1:] if len(sys.argv) > 1 else sorted(glob.glob('chain_a21_*/'))
 if not chain_dirs:
-    chain_dirs = sorted(glob.glob('/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc/chain_a21_*/'))
+    chain_dirs = sorted(glob.glob(f'{MCMC_DIR}/chain_a21_*/'))
 
 print(f"Found {len(chain_dirs)} chain directories")
 
@@ -227,6 +229,6 @@ fig.suptitle(
     fontsize=11, fontweight='bold')
 
 plt.tight_layout()
-out = 'T_profiles_npz.png'
-plt.savefig(out, dpi=150, bbox_inches='tight')
+out = f'{FIG_DIR}/T_profiles_npz.png'
+if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
 print(f"Saved: {out}")

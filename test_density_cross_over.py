@@ -15,8 +15,9 @@ import glob
 import json
 import numpy as np
 import importlib.util
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 _spec = importlib.util.spec_from_file_location(
-    'm82', '/home/jcchen2/mars-hefesto-inversion/82.mcmc_core_nGibbs_wideMoI.py')
+    'm82', f'{HERE}/82.mcmc_core_nGibbs_wideMoI.py')
 m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(m)
 
@@ -33,7 +34,7 @@ S_PAR_TEST  = 3.0                   # verification step along tangent directions
 H = {'T_lit': 10.0, 'P_lit': 0.10, 'Mg#': 0.005, 'T_core': 50.0,
      'Mg#_bulk_bml': 0.02, 'BML_thickness': 10.0, 'w_S': 0.005, 'R_cmb': 5.0}
 
-sys.path.insert(0, '/home/jcchen2/mars-hefesto-inversion')
+sys.path.insert(0, HERE)
 m.CF.configure(route=ROUTE, verbose=False)
 KEYS  = list(m.PRIOR)
 WIDTH = np.array([m.PRIOR[k][1] - m.PRIOR[k][0] for k in KEYS])

@@ -16,17 +16,20 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import importlib.util
+from mars_config import MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ------------------------------------------------------------
 # load mcmc module
 # ------------------------------------------------------------
 spec = importlib.util.spec_from_file_location(
     "mcmc",
-    "/home/jcchen2/mars-hefesto-inversion/15.mcmc_withBML_MOI.py")
+    f"{HERE}/15.mcmc_withBML_MOI.py")
 mcmc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mcmc)
 
-os.chdir('/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc')
+os.chdir(MCMC_DIR)
 mcmc.load_gravity_profile()
 khan_cache = mcmc.compute_khan_median()
 
@@ -262,7 +265,7 @@ for ax_idx in range(len(phases_to_plot), nrows * ncols):
 # ------------------------------------------------------------
 plt.tight_layout(rect=[0, 0, 1, 0.96])
 
-out_png = 'differential_residual_BML_vs_noBML.png'
-fig.savefig(out_png, dpi=150, bbox_inches='tight')
+out_png = f'{FIG_DIR}/differential_residual_BML_vs_noBML.png'
+if SAVE_FIG: fig.savefig(out_png, dpi=150, bbox_inches='tight')
 print(f"Saved → {out_png}")
 plt.close(fig)

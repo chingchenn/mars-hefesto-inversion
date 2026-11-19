@@ -4,8 +4,12 @@ import importlib.util, sys, io, contextlib
 import numpy as np
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import os
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
-M59 = "/home/jcchen2/mars-hefesto-inversion/59.mcmc_nGibbs_Mars_a25.py"
+M59 = f"{HERE}/59.mcmc_nGibbs_Mars_a25.py"
 spec = importlib.util.spec_from_file_location("m59", M59)
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 
@@ -54,5 +58,5 @@ for ax, D in zip(axes, DS):
 axes[0].set_ylabel('Mg#_bulk_bml', fontsize=14)
 cb = fig.colorbar(pc, ax=axes, label='(MoI − bias − obs)/σ')
 cb.ax.tick_params(labelsize=14)
-plt.savefig('/net/beno3/data1/jcchen2/mars-hefesto-runs/figures/bml_landscape.png', dpi=150, bbox_inches='tight')
+if SAVE_FIG: plt.savefig(f'{FIG_DIR}/bml_landscape.png', dpi=150, bbox_inches='tight')
 print("saved bml_landscape.png")

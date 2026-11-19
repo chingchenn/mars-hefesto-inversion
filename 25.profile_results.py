@@ -12,8 +12,10 @@
 import os
 import re
 import pandas as pd
+from mars_config import MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
-BASE_DIR = "/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc/"
+BASE_DIR = MCMC_DIR
 ADIN_COLUMNS = ["pressure", "col2", "temperature"]
 
 
@@ -128,4 +130,4 @@ ax.set_ylabel("Pressure (GPa)")
 ax.set_title("All chains & steps: Vs vs Pressure")
 ax.invert_yaxis()  
 plt.tight_layout()
-plt.savefig("test_vs_pressure_all.png", dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(FIG_DIR, "test_vs_pressure_all.png"), dpi=150)

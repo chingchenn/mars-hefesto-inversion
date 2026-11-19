@@ -23,15 +23,20 @@ from mars_config import MCMC_DIR, FIG_DIR
 # ══════════════════════════════════════════════════════════════════════════
 # config
 # ══════════════════════════════════════════════════════════════════════════
-MAIN_PY = os.path.expanduser('~/mars-hefesto-inversion/86.change_traveltime_a52.py')
+# composition case: (MCMC script, chain prefix, excluded chains)
+COMP  = 'YM'          # 'YM' / 'TA' / 'EH45'
+CASES = {'YM':   ('86.change_traveltime_a52.py', 'chain_a52B', ['chain_a52B_04']),
+         'TA':   ('main_MCMC_TA.py',             'chain_a53B', []),
+         'EH45': ('main_MCMC_EH45.py',           'chain_a54B', [])}
+MAIN_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), CASES[COMP][0])
 ROUTE   = 'B'
 
-# representative model: pick from the actual a52B posterior chain, same logic
+# representative model: pick from the actual posterior chain (PREFIX), same logic
 # as 130 (post burn-in, WANT_STATE, the accepted step whose h_liquid is
 # closest to that state's median -- a representative sample, not best-misfit).
 # Set CHAIN_STEP_OVERRIDE = ('chain_a52B_03', 4821) to force a specific one.
-PREFIX             = 'chain_a52B'
-EXCLUDE            = ['chain_a52B_04']
+PREFIX             = CASES[COMP][1]
+EXCLUDE            = CASES[COMP][2]
 WANT_STATE         = 'layered'        # 'solid' / 'layered' / 'molten'
 BURNIN_FRAC        = 0.3
 H_STATE_TOL        = 1.0
@@ -333,8 +338,8 @@ ax.legend(h2, l2, loc='lower right', fontsize=FS - 3, framealpha=0.9)
 
 fig.tight_layout()
 if SAVE_FIG:
-    fig.savefig(os.path.join(FIG_DIR, '131_phase_assemblage_T.png'), dpi=200, bbox_inches='tight')
-print('saved 131_phase_assemblage_T.png')
+    fig.savefig(os.path.join(FIG_DIR, f'131_phase_assemblage_T_{COMP}.png'), dpi=200, bbox_inches='tight')
+print(f'saved 131_phase_assemblage_T_{COMP}.png')
 
 # ══════════════════════════════════════════════════════════════════════════
 # figure 2: assemblage | rho | velocity (Vp & Vs together, different colours)
@@ -404,6 +409,6 @@ for a in axs:
 
 fig2.tight_layout()
 if SAVE_FIG:
-    fig2.savefig(os.path.join(FIG_DIR, '131_assemblage_rho_velocity.png'), dpi=200, bbox_inches='tight')
-print('saved 131_assemblage_rho_velocity.png')
+    fig2.savefig(os.path.join(FIG_DIR, f'131_assemblage_rho_velocity_{COMP}.png'), dpi=200, bbox_inches='tight')
+print(f'saved 131_assemblage_rho_velocity_{COMP}.png')
 plt.show()

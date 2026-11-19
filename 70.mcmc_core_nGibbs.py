@@ -70,15 +70,25 @@ MARS_RADIUS      = 3389.5
 MARS_RADIUS_M    = MARS_RADIUS * 1000
 T_SURF           = 220.0
 MARS_MASS_OBS    = 6.4171e23
-MARS_MASS_SIGMA  = MARS_MASS_OBS * 0.01
-MOI_OBS          = 0.36379   # Bagheri 2019 / Konopliv 2016, C/MR^2 with
-                             # R = mean radius 3389.5 km (Samuel 2021/2023 framework).
-                             # Drilleau 2026 uses Konopliv 2020 = 0.3634 +- 0.00006,
-                             # 1 sigma away and in the opposite direction -> discussion
-                             # sensitivity, not the baseline.
-MOI_SIGMA        = 0.0005
-MOI_BIAS         = 0.0  # pipeline systematic: pure-Samuel PanelJ through this
-                             # integrator gives MoI=0.36515 vs obs 0.36379 (budget test)
+MARS_MASS_OBS    = 6.4171e23
+MARS_MASS_SIGMA  = MARS_MASS_OBS * 2.63e-3
+                             # 0.263 % = sqrt(0.031^2 + 0.032^2 + 0.259^2)
+                             #   0.031 % mean density 3935 +- 1.2 kg/m3
+                             #           (Rivoldini 2011; used by Khan 2023,
+                             #            Irving 2023, Bi 2025)
+                             #   0.032 % nGibbs vs HeFESTo, 2-19 GPa, same
+                             #           composition and P-T (this work)
+                             #   0.259 % fixed 0-100 km column: measured
+                             #           forward sensitivity to swapping the
+                             #           borrowed crust (Samuel 2023, 68 km /
+                             #           3025 kg m-3) for Kim et al. 2023
+                             #           (48 km / 2650 kg m-3)
+MOI_OBS          = 0.3634    # Konopliv 2020; same value as Khan 2023,
+                             # Irving 2023, Bi 2025, Drilleau 2026.
+                             # Supersedes 0.36379 (Konopliv 2016 / Bagheri
+                             # 2019) used in a31-a38.
+MOI_SIGMA        = 0.00006   # Konopliv 2020
+MOI_BIAS         = 0.0
 MCMC_TEMPERATURE = 1.0
 
 SC_N_FIXED  = 40      # 節點數
@@ -133,14 +143,14 @@ PRIOR = {
 }  
 
 STEP = {
-'T_lit': 50.0,
-'P_lit': 0.7,
-'Mg#': 0.025,
-'T_core': 100.0,
-'Mg#_bulk_bml': 0.06,
-'BML_thickness': 25.0,
-'w_S': 0.02,
-'R_cmb':25.0,
+'T_lit': 25.0,
+'P_lit': 0.35,
+'Mg#': 0.008,
+'T_core': 50.0,
+'Mg#_bulk_bml': 0.03,
+'BML_thickness': 12.0,
+'w_S': 0.003,
+'R_cmb':4.0,
 }
 
 CHAIN_KEYS = (

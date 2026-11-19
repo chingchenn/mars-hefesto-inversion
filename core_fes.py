@@ -64,7 +64,7 @@ ROUTES = {
     'L': dict(fe='kuwayama', fes='sakai', mix='margules', tag='Kuwayama Fe + Sakai FeS (a35)'),
 }
 
-ROUTE         = 'A'
+ROUTE         = 'B'
 LIU_S_READING = 'B'   # Liu Table 1 的 S 列身分(待 Weiyi 確認):
                       #   'B' = virtual pure-S endmember,直接用
                       #   'A' = Fe90S18 binary 的擬合,需先反解出 endmember

@@ -13,7 +13,7 @@ from scipy.optimize import fsolve, brentq, curve_fit
 # ── 設定 ───────────────────────────────────────────────────────────────────────
 CHAIN_DIR = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
 CHAIN_DIR = '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain'
-PREFIX    = 'chain_a23'
+PREFIX    = 'chain_a24'
 BURNIN    = 0.1  
 OUT_DIR   = '/net/beno3/data1/jcchen2/mars-hefesto-runs/figures'
 OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'

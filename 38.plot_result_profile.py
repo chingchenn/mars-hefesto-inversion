@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 MCMC_BASE_DIR  = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
-CHAIN_PREFIX   = 'chain_a23'
-HEF_PREFIX     = 'chain_a21'
+CHAIN_PREFIX   = 'chain_a31'
+HEF_PREFIX     = 'chain_a23'
 KHAN_MODEL_DIR = '/net/beno3/data1/jcchen2/Mars_Khan_2023/LSL_Models'
 SAMUEL_BASE    = ('/net/beno3/data1/jcchen2/Mars_Samuel_2023/'
                   'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
@@ -169,21 +169,19 @@ print(f"\nSearching best in {HEF_PREFIX}...")
 hf = find_best(MCMC_BASE_DIR, HEF_PREFIX)
 print(f"  {os.path.basename(hf['chain_dir'])}  step={hf['step']}  misfit={hf['misfit']:.4f}")
 
-hf_man     = read_fort56(f"{hf['chain_dir']}/step_{hf['step']:05d}/s3_final/fort.56")
-hf_bml_raw = read_fort56(f"{hf['chain_dir']}/step_{hf['step']:05d}/bml/fort.56")
-has_hf_bml = hf_bml_raw is not None and hf['params'] is not None
+hf_npz = np.load(f"{hf['chain_dir']}/profile_s{hf['step']:05d}.npz")
+has_hf_bml = 'bml_depth_km' in hf_npz.files
+
+hf_man = {'depth': hf_npz['depth_km'], 'T': hf_npz['T_K'],
+          'Vp': hf_npz['Vp'], 'Vs': hf_npz['Vs'], 'rho': hf_npz['rho']}
 
 if has_hf_bml:
-    bml_thick    = hf['params'].get('BML_thickness', 168.7)
-    hf_bml_depth = (hf_bml_raw['depth'] - hf_bml_raw['depth'][0]
-                    + TRUE_CMB_DEPTH - bml_thick)
-    Mg_bml       = hf['params'].get('Mg#_bml', 0.7)
-    phi          = compute_phi(hf_bml_raw['T'], hf_bml_raw['P'], Mg_bml)
-    hf_bml_Vp, hf_bml_Vs = apply_pierru(hf_bml_raw['Vp'], hf_bml_raw['Vs'], phi)
-    hf_bml_rho   = hf_bml_raw['rho']
-    hf_bml_T     = hf_bml_raw['T']
-    oc_mask      = phi >= PHI_OUTER_CORE
-    hf_oc        = hf_bml_depth[np.argmax(oc_mask)] if oc_mask.any() else hf_bml_depth[-1]
+    hf_bml_depth = hf_npz['bml_depth_km']
+    hf_bml_Vp    = hf_npz['bml_Vp']
+    hf_bml_Vs    = hf_npz['bml_Vs']
+    hf_bml_rho   = hf_npz['bml_rho']
+    hf_bml_T     = hf_npz['bml_T_K']
+    hf_oc        = float(hf_npz['bml_outer_core_depth_abs'][0])
 
 # Khan crust splice for best nGibbs
 m_shal = Z <= SPLICE_DEPTH
@@ -230,8 +228,8 @@ for i, (ax, (xlabel, kvals, med, p16, p84, kc, vkey, bvkey),
         npz = p['npz']
         d   = np.concatenate([Z[m_shal], npz['depth_km'][npz['depth_km'] > SPLICE_DEPTH]])
         v   = np.concatenate([
-                np.interp(Z[m_shal], ng_depth, best_npz[vkey]),
-                npz[vkey][npz['depth_km'] > SPLICE_DEPTH]])
+            np.interp(Z[m_shal], npz['depth_km'], npz[vkey]),
+            npz[vkey][npz['depth_km'] > SPLICE_DEPTH]])
         ax.plot(v, d, color=C_NG, lw=0.8, alpha=0.25, zorder=4)
         if bvkey in npz.files:
             ax.plot(npz[bvkey], npz['bml_depth_km'],
@@ -270,7 +268,7 @@ for i, (ax, (xlabel, kvals, med, p16, p84, kc, vkey, bvkey),
     ax.set_xlabel(xlabel, fontsize=13)
     ax.grid(True, ls='--', alpha=0.3, lw=0.8)
     ax.tick_params(labelsize=13)
-    ax.legend(fontsize=7.5, loc='lower left', framealpha=0.85)
+    ax.legend(fontsize=7.5, loc='upper left', framealpha=0.85)
     for sp in ax.spines.values(): sp.set_linewidth(2.0)
 
     # pressure axis
@@ -348,8 +346,8 @@ for sp in axr.spines.values(): sp.set_linewidth(2.0)
 def fmt(p):
     if not p: return ''
     return (f"T_lit={p.get('T_lit',0):.0f}K  P_lit={p.get('P_lit',0):.2f}GPa  "
-            f"Mg#={p.get('Mg#',0):.3f}  T_bml={p.get('T_bml',0):.0f}K  "
-            f"Mg#_bml={p.get('Mg#_bml',0):.3f}  BML={p.get('BML_thickness',0):.0f}km")
+            f"Mg#={p.get('Mg#',0):.3f}  T_core={p.get('T_core',0):.0f}K  "
+            f"Mg#_bulk={p.get('Mg#_bulk_bml',0):.3f}  BML={p.get('BML_thickness',0):.0f}km")
 
 fig.suptitle(
     f'Mars Mantle+BML: nGibbs (top {len(ng_profiles)}) vs HeFESTo vs Samuel 2023 vs Khan 2023\n'

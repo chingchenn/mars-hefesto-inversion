@@ -34,9 +34,6 @@ from mars_config import *
 # ── Fe-S core EoS (a36: core in forward model) ───────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import core_fes as CF     
-
-
-
 BI_RIC_KM  = 612.0           # Bi 2025 refined inversion
 BI_RIC_SIG = 112.0           # sqrt(50^2 + 100^2): 形式誤差 + OC 速度 5%→100 km 系統項
 RIC_MAX_KM = 750.0           # InSight 上限(SKS 最大穿透深度, Irving 2023)
@@ -47,7 +44,6 @@ NG_S_HEADERS = ['P(GPa)(System_main)', 'S(J/g/K)(System_main)',
                 'Si', 'Mg', 'Fe', 'Ca', 'Al', 'Na', 'Cr', 'O']
 NG_S_MIN     = 1.75
 NG_S_MAX     = 2.90
-
 
 # ── travel-time misfit scale ──────────────────────────────────────────────────
 # a42: 累加方式由「事件內平均後相加」改為「逐筆相加」,與 Drilleau et al. 2024
@@ -72,12 +68,10 @@ NG_S_MAX     = 2.90
 # Samuel 地殼下命中 0 筆(最大殘差 < 10 sigma ~ 100 s)。
 # 當作 miss 處理而非 cap: 模型確實沒給出該相位的正確分支。
 BRANCH_JUMP_S = 300.0
-RES_CAP             = 10.0   # sigma
 MISS_PENALTY        = 12.0   # 每個算不出的相位;必須 > RES_CAP
-MISS_PENALTY_PER_PH = 20.0   # 每個相位,整個事件 TauP 丟例外時;必須 > MISS_PENALTY
 SOLIDUS_SIGMA = 12.0    # K, temperature scale for ~1% melt fraction
 SOLIDUS_CAP   = 25.0    # corresponds to 60 K excess
-START_MISFIT_MAX = 3000.0
+START_MISFIT_MAX = 800.0
 
 # per-proposal S_lit log (includes proposals rejected for being out of range)
 _NG_S_LOG = {'last': np.nan, 'last_in_range': True, 'all': [], 'n_below': 0, 'n_above': 0}
@@ -169,7 +163,7 @@ STEP = {
 'Mg#_bulk_bml': 0.015,
 'BML_thickness': 12.0,
 'w_S': 0.0025,
-'R_cmb': 4.0,
+'R_cmb': 1.0,
 }
 
 CHAIN_KEYS = (
@@ -178,7 +172,7 @@ CHAIN_KEYS = (
     'h_solid_km', 'h_liquid_km', 'melting', 'Mg_solid', 'Mg_liquid',
     'rho_solid_bml', 'rho_liquid_bml',  'P_interface',
     'T_mantle_bottom', 'T_interface', 'S_lit', 'tt_n_ev', 'tt_n_ph', 'tt_n_miss',
-    'tt_n_capped', 'tt_n_branch', 'tt_miss_by_event',
+    'tt_n_capped', 'tt_n_branch', 'tt_miss_by_event', 'tt_miss_list',
     'R_ic_km', 'ric_sigma', 'rho_core_mean', 'Vp_core_cmb',
     'P_center_core', 'T_center_core',
     'gap_min', 'P_cmb', 'P_bml_top', 'z_lit_km',
@@ -1679,16 +1673,15 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
             obs_t, sigma = obs_val
             if sigma <= 0 or not np.isfinite(obs_t):
                 continue
-            # 不罰、不計入 ev_n:那筆預測值根本不是該相位(4000 s vs 30 s),
-            # 是模型「對這筆資料沒有預測」而非「預測得差」。
-            # 罰 MISS_PENALTY 會在似然面上造出一道 12 單位、位置隨參數移動的牆
-            # (88 校準的 15 次擾動裡觸發 5 次),那不是資料的偏好。
-            # a32 的反向誘因(弄掉難相位變便宜)在此不成立:300 s 遠高於任何真實
-            # 殘差(實測 capped=0,最大 < 10 sigma ~ 100 s),模型無法藉由小幅
-            # 調整把真實相位推過門檻。
-            # 代價:n_data 隨模型變(158-160),misfit 不可跨模型直接比。
-            # tt_n_branch 已進 CHAIN_KEYS,可事後檢查觸發頻率。
+                        # 預測值離觀測 > BRANCH_JUMP_S,表示小弧分支在三分區邊緣消失,
+            # TauP 的「首達」silently 回傳大弧(95 實測: S0918a SSS pred 4368 s,
+            # obs ~277 s 級;射線參數 p=714 屬大弧,而小弧需要 p>735 的觸底窗口,
+            # Khan 地殼底 Vs 4.484 -> p_max=733.7,窗口不存在)。
+            # 與 nopred 同規則:模型無法對這筆觀測給出可用預測 -> MISS_PENALTY。
+            # 不另設罰則。300 s 是偵測門檻:其餘 158 筆最大殘差 < 100 s,
+            # 真實走時誤差不可能到 300 s,零誤傷(Samuel 地殼下命中 0 筆)。
             if abs(obs_t - p_val) > BRANCH_JUMP_S:
+                ev_sum += MISS_PENALTY; ev_n += 1; ev_miss += 1
                 tt_n_branch += 1
                 miss_list.append(f'{event}:{phase}:branchjump@{p_val:.0f}')
                 continue
@@ -1697,10 +1690,7 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
                 ev_sum += MISS_PENALTY; ev_n += 1; ev_miss += 1
                 miss_list.append(f'{event}:{phase}:nonfinite')
                 continue
-            if res_sigma >= RES_CAP:
-                tt_n_capped += 1
-                miss_list.append(f'{event}:{phase}:capped@{res_sigma:.1f}')
-            ev_sum += min(res_sigma, RES_CAP); ev_n += 1
+            ev_sum += res_sigma; ev_n += 1 
             
  
         if ev_n > 0:
@@ -1716,7 +1706,9 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
         tt_misfit = 999.0
     for ev in obs_dataset:
         if ev not in seen_events:
-            tt_misfit += MISS_PENALTY_PER_PH * _N_PH[ev]
+            tt_misfit += MISS_PENALTY * _N_PH[ev]
+            tt_n_miss += _N_PH[ev]
+            miss_by_event[ev] = _N_PH[ev]
  
     solidus_penalty = compute_solidus_penalty(prof, params) if params else 0.0
     total = (tt_misfit + solidus_penalty
@@ -1733,7 +1725,6 @@ def compute_misfit(taup_model, obs_dataset, prof, params=None,
  
     print(f"  TT={tt_misfit:.4f}(events={tt_n_ev}/{len(obs_dataset)}, "
           f"phases={tt_n_ph}, miss={tt_n_miss}, branch={tt_n_branch}, "
-          f"capped={tt_n_capped})  "
           f"solidus={solidus_penalty:.4f}  "
           f"mass={mass_sigma:.2f}sig  moi={moi_sigma:.2f}sig  "
           f"grav={grav_sigma:.2f}sig  ric={ric_sigma:.2f}sig  total={total:.4f}")
@@ -1870,24 +1861,23 @@ def _forward_impl(params, run_dir, model_name, samuel_cache):
     })
  
     return misfit, _n_ph, components, prof, None
-# ── MCMC ──────────────────────────────────────────────────────────────────────
-# 94 實測(R_cmb=1620, w_S=0.170 附近):
-#   沿 delta_R_cmb = 1630 * delta_w_S 走,質量幾乎不變
-#     dw = +0.004 (R +6.5 km)   mass 9.45 -> 9.40   dS = -1.09
-#     dw = +0.012 (R +19.6 km)  mass 9.45 -> 9.21   dS = -3.28
-#   等向提議下同樣的 R_cmb 位移單獨移動,mass 會變 3.4 sigma。
-# a44 前 140 步 R_cmb 在 11 條鏈全是水平直線:STEP['R_cmb']=1.0 下
-# 單步位移 1 km,走完 500 km 的 prior 需要 25 萬步。脊向提議解決這件事。
-# 仍是對稱提議(兩項都是零均值高斯的線性組合),細緻平衡不破。
-_RIDGE_KM_PER_WS = 1630.0
-_RIDGE_SIGMA     = 0.004      # w_S 的脊向步長 -> R_cmb 走 6.5 km,單步 dS ~ 1.1
+# ── a47: null-space proposal (96_jacobian_a46.npz) ───────────────────────────
+# p' = p + (N eps + G eta) * SCALE ; eps ~ N(0, S_PAR^2 I6), eta ~ N(0, S_PERP^2 I2)
+# J fixed for the whole run -> symmetric Gaussian proposal, detailed balance holds.
+# S_PERP > 0 is REQUIRED (S_PERP = 0 confines the chain to an affine subspace).
+_JAC   = np.load('/home/jcchen2/mars-hefesto-inversion/96_jacobian_a46.npz')
+_N96   = _JAC['N']; _G96 = _JAC['G']; _SC96 = _JAC['SCALE']
+S_PAR  = 2.0
+# x singular values 6.76/2.72 -> ~1.0/0.4 sigma per step across the walls
+S_PERP_FAR   = 1.0    # geo 未達標:大步爬殼 (sv 6.76/2.72 -> ~1.0/0.4 sig/step)
+S_PERP_NEAR  = 0.15   # geo 達標後:殼內精修
+GEO_SWITCH   = 5.0    # sigma
+_GEO_OK      = {'ok': False}
 def propose(current, rng):
-    # No truncation: out-of-prior proposals are counted as rejections in run_mcmc.
-    p = {k: current[k] + rng.normal(0, STEP[k]) for k in PRIOR}
-    d = rng.normal(0, _RIDGE_SIGMA)
-    p['w_S']   += d
-    p['R_cmb'] += _RIDGE_KM_PER_WS*d
-    return p
+    s_perp = S_PERP_NEAR if _GEO_OK['ok'] else S_PERP_FAR
+    x  = np.array([current[k] for k in PRIOR])
+    dx = _N96 @ rng.normal(0, S_PAR, 6) + _G96 @ rng.normal(0, s_perp, 2)
+    return {k: float(v) for k, v in zip(PRIOR, x + dx*_SC96)}
 
 
 def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
@@ -1923,10 +1913,15 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
         current_misfit = chain[-1]['misfit']
         accept_count   = sum(1 for s in chain if s.get('accepted', False))
         current_components = {k: chain[-1].get(k) for k in CHAIN_KEYS}
+        if (chain[-1].get('mass_sigma', 9e9) < GEO_SWITCH
+                and chain[-1].get('moi_sigma', 9e9) < GEO_SWITCH):
+            _GEO_OK['ok'] = True
+            print(f"[switch] resume: geo already <{GEO_SWITCH}sig, "
+                  f"S_PERP={S_PERP_NEAR}", flush=True)
     else:
         run_dir    = os.path.join(chain_dir, "step_current")
         model_name = f"mcmc_{prefix}_c{chain_id:02d}_current"
-        for attempt in range(40):
+        for attempt in range(300):
             trial = current.copy() if attempt == 0 else {
                 k: float(rng.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
             if attempt > 0:
@@ -1934,9 +1929,9 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
                       f"Mg#={trial['Mg#']:.3f}  T_core={trial['T_core']:.1f}  "
                       f"Mg#_bulk_bml={trial['Mg#_bulk_bml']:.3f}  w_S={trial['w_S']:.3f}")
             current_misfit, _, current_components, _, _ = forward(
-                trial, run_dir, model_name, samuel_cache)
+                trial, run_dir,  f"{model_name}_try{attempt}", samuel_cache)
             if (current_misfit is not None and np.isfinite(current_misfit)
-                and current_misfit < START_MISFIT_MAX):
+                and  current_components.get('misfit_tt', 9e9) < 480.0):
                 current = trial
                 print(f"  Start OK (attempt {attempt+1}): misfit={current_misfit:.4f}")
                 break
@@ -1975,6 +1970,13 @@ def run_mcmc(chain_id, n_steps, start_params=None, prefix='chain'):
             current_misfit     = proposed_misfit
             current_components = components
             accept_count      += 1
+
+            if not _GEO_OK['ok'] \
+                        and components['mass_sigma'] < GEO_SWITCH \
+                        and components['moi_sigma'] < GEO_SWITCH:
+                    print(f"[switch] step {step+1}: geo<{GEO_SWITCH}sig, "
+                          f"S_PERP {S_PERP_FAR} -> {S_PERP_NEAR}", flush=True)
+                    _GEO_OK['ok'] = True
 
             if prof is not None:
                 np.savez(os.path.join(chain_dir, f"profile_s{step+1:05d}.npz"),
@@ -2048,6 +2050,7 @@ if __name__ == "__main__":
     parser.add_argument('--random_start', action='store_true')
     parser.add_argument('--start',        type=str,  default=None)
     parser.add_argument('--scan_R', action='store_true')
+    parser.add_argument('--temperature', type=float, default=None)
     parser.add_argument('--route', default='B', choices=['A', 'B'],
                         help='core EoS route: A = all-Liu (Gamma mixing), '
                              'B = Liu Fe + Sakai FeS (Margules)')
@@ -2077,10 +2080,13 @@ if __name__ == "__main__":
         if os.path.exists(_cf) and os.path.getsize(_cf) > 0:
             raise SystemExit(f"{_cf} exists: --random_start would be overridden by "
                              f"resume. Remove it or use a different --prefix.")
-        rng_init     = np.random.default_rng(args.chain)
+        rng_init     = np.random.default_rng([args.chain, 47, 602, 504, 199])
         start_params = {k: float(rng_init.uniform(lo, hi)) for k, (lo, hi) in PRIOR.items()}
         print(f"random_start: {start_params}")
 
+    if args.temperature is not None:
+        MCMC_TEMPERATURE = args.temperature
+        print(f"MCMC_TEMPERATURE override: {MCMC_TEMPERATURE}")
     
     if args.scan_R:
         run_dir = os.path.join(MCMC_DIR, 'scan_R')

@@ -361,7 +361,7 @@ import matplotlib.pyplot as plt
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
-                  'Nature_Samuel/METADATA_BML/DATA_FIG1')
+                  'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
 
 R_MARS   = 3389.5
 DEPTH_LO = 1200.0            # 圖的上緣,留一點 mantle/BML 看 CMB 跳躍

@@ -42,7 +42,7 @@ MCMC_BASE_DIR  = MCMC_DIR
 CHAIN_PREFIX   = 'chain_a60_TA'
 HEF_PREFIX     = 'chain_a21'
 SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
-                  'Nature_Samuel/METADATA_BML/DATA_FIG1')
+                  'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
 
 OUT_DIR        = FIG_DIR
 

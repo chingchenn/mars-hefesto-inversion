@@ -15,7 +15,7 @@ MCMC_BASE_DIR  = MCMC_DIR
 CHAIN_PREFIX   = 'chain_a34'
 HEF_PREFIX     = 'chain_a23'   # needs profile_sNNNNN.npz (a23 onward)
 SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
-                  'Nature_Samuel/METADATA_BML/DATA_FIG1')
+                  'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
 
 DEPTH_MAX      = 1800
 SPLICE_DEPTH   = 100.0

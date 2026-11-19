@@ -24,7 +24,7 @@ XLSX_FILE        = os.path.join(HERE, 'Pierru 2026 data 2.xlsx')
 SHEET            = 'Data Fig. 6'
 CHAIN_ROOT       = MCMC_DIR
 SAMUEL_RHO       = (f'{DATA_BASE}/Mars_Samuel_2023/'
-                    'Nature_Samuel/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat')
+                    'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat')
 COMPS            = ['YM20']   # a60 compositions to pool, e.g. ['YM20', 'TA', 'EH45']
 EXCLUDE          = []
 BURN_FRAC        = 0.40

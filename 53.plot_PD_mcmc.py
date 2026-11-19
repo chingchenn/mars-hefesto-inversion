@@ -15,9 +15,11 @@ from scipy.optimize import fsolve
 
 # ── 設定 ───────────────────────────────────────────────────────────────────────
 CHAIN_DIR = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
+CHAIN_DIR = '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain'
 PREFIX    = 'chain_a23'
 BURNIN    = 0.1   # 丟掉前 30%
 OUT_DIR   = '/net/beno3/data1/jcchen2/mars-hefesto-runs/figures'
+OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
 # ──────────────────────────────────────────────────────────────────────────────
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -185,6 +187,6 @@ fig.suptitle(
     fontsize=11)
 
 fname = os.path.join(OUT_DIR, TAG + 'phase_diagram_posterior.png')
-plt.savefig(fname, dpi=150, bbox_inches='tight')
-plt.close()
+# plt.savefig(fname, dpi=150, bbox_inches='tight')
+# plt.close()
 print(f"saved {fname}")

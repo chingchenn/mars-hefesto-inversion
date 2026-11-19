@@ -1,82 +1,21 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Sun May 17 18:53:18 2026
-
-@author: chingchen
-"""
-
-"""
-compare_khan_samuel.py
-
-比較：
-同一 event
-同一 phase
-
-Khan vs Samuel travel times 差多少
-"""
-
-import pandas as pd
+# 34.khan_median_traveltime.py
+# Khan vs Samuel travel times for each event and phase, and the mean |Samuel - Khan| per phase.
 import numpy as np
+import pandas as pd
 
-# ============================================================
-# read comparison table
-# ============================================================
+CSV_FILE = '/Users/chingchen/Desktop/Lunar/data/combined_travel_times.csv'
 
-df = pd.read_csv('/Users/chingchen/Desktop/Lunar/data/combined_travel_times.csv')
+df = pd.read_csv(CSV_FILE)
 
-print('\n')
-print('='*70)
+print('=' * 70)
 print('Khan vs Samuel differential travel-time comparison')
-print('='*70)
+print('=' * 70)
+for event in sorted(df['Event'].unique()):
+    print(f'\nEvent: {event}')
+    for _, row in df[df['Event'] == event].iterrows():
+        print(f"{row['Phase']:8s} | Khan = {row['Khan']:8.2f} s | Samuel = {row['Samuel']:8.2f} s | "
+              f"Samuel-Khan = {row['Samuel_minus_Khan_s']:+7.2f} s")
 
-# ============================================================
-# loop over events
-# ============================================================
-
-events = sorted(df['Event'].unique())
-
-for event in events:
-
-    sub = df[df['Event'] == event]
-
-    print('\n')
-    print('='*70)
-    print(f'Event: {event}')
-    print('='*70)
-
-    for _, row in sub.iterrows():
-
-        phase   = row['Phase']
-        khan    = row['Khan']
-        samuel  = row['Samuel']
-        diff    = row['Samuel_minus_Khan_s']
-
-        print(
-            f'{phase:8s} | '
-            f'Khan = {khan:8.2f} s | '
-            f'Samuel = {samuel:8.2f} s | '
-            f'Samuel-Khan = {diff:+7.2f} s'
-        )
-
-# ============================================================
-# summary statistics
-# ============================================================
-
-print('\n')
-print('='*70)
-print('Overall statistics')
-print('='*70)
-
-print('\nMean absolute difference by phase:\n')
-
-phase_stats = (
-    df.groupby('Phase')['Samuel_minus_Khan_s']
-      .apply(lambda x: np.mean(np.abs(x)))
-)
-
-for phase, val in phase_stats.items():
-
+print('\nMean absolute difference by phase:')
+for phase, val in df.groupby('Phase')['Samuel_minus_Khan_s'].apply(lambda x: np.mean(np.abs(x))).items():
     print(f'{phase:8s} : {val:.2f} s')
-
-print('\nDone.')

@@ -9,20 +9,24 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-MCMC_BASE_DIR  = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
-CHAIN_PREFIX   = 'chain_a31'
-HEF_PREFIX     = 'chain_a23'
-KHAN_MODEL_DIR = '/net/beno3/data1/jcchen2/Mars_Khan_2023/LSL_Models'
-SAMUEL_BASE    = ('/net/beno3/data1/jcchen2/Mars_Samuel_2023/'
-                  'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
+MCMC_BASE_DIR  = '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain'
+CHAIN_PREFIX   = 'chain_a34'
+HEF_PREFIX     = 'chain_a23'   # needs profile_sNNNNN.npz (a23 onward)
+KHAN_MODEL_DIR = '/Users/chingchen/Desktop/Lunar/Mars_Khan_2023/LSL_Models'
+SAMUEL_BASE    = ('/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/'
+                  'Nature_Samuel/METADATA_BML/DATA_FIG1')
 
 DEPTH_MAX      = 1800
-SPLICE_DEPTH   = 200.0
+SPLICE_DEPTH   = 100.0
 MARS_RADIUS    = 3389.5
 TRUE_CMB_DEPTH = 1743.3
 PHI_OUTER_CORE = 0.30
 MG_DUNCAN_REF  = 0.75
 TOP_N          = 20
+
+PLOT_HEFESTO = False 
+
+Z = np.linspace(0, DEPTH_MAX, 500)
 
 # ── PIERRU CORRECTION ─────────────────────────────────────────────────────────
 def solidus_duncan2018(P):
@@ -49,6 +53,13 @@ def apply_pierru(Vp, Vs, phi):
     dVs = np.interp(phi, phi_n, dVs_n)
     return Vp*(1-dVp), np.maximum(Vs*(1-dVs), 0.0)
 
+
+
+def fmt(p):
+    if not p: return ''
+    return (f"T_lit={p.get('T_lit',0):.0f}K  P_lit={p.get('P_lit',0):.2f}GPa  "
+            f"Mg#={p.get('Mg#',0):.3f}  T_core={p.get('T_core',0):.0f}K  "
+            f"Mg#_bulk={p.get('Mg#_bulk_bml',0):.3f}  BML={p.get('BML_thickness',0):.0f}km")
 # ── READ FORT.56 ──────────────────────────────────────────────────────────────
 def read_fort56(path):
     if not os.path.exists(path):
@@ -74,7 +85,7 @@ def read_fort56(path):
 # ── FIND TOP-N nGibbs MODELS ──────────────────────────────────────────────────
 def find_top_n(base_dir, prefix, n=20):
     results = []
-    for fpath in sorted(glob.glob(f'{base_dir}/{prefix}_*/chain.json')):
+    for fpath in sorted(glob.glob(f'{base_dir}/{prefix}_*/chain.jso*')):
         try:
             chain = json.load(open(fpath))
             for s in chain:
@@ -93,7 +104,7 @@ def find_top_n(base_dir, prefix, n=20):
 # ── FIND BEST HeFESTo MODEL ───────────────────────────────────────────────────
 def find_best(base_dir, prefix):
     best = {'misfit': 999.0, 'step': None, 'chain_dir': None, 'params': None}
-    for fpath in sorted(glob.glob(f'{base_dir}/{prefix}_*/chain.json')):
+    for fpath in sorted(glob.glob(f'{base_dir}/{prefix}_*/chain.jso*')):
         try:
             chain = json.load(open(fpath))
             for s in chain:
@@ -117,20 +128,25 @@ sam_sol, dep_sol = np.loadtxt(f'{SAMUEL_BASE}/PANEL_I/Tsol.dat').T
 sam_liq, dep_liq = np.loadtxt(f'{SAMUEL_BASE}/PANEL_I/Tliq.dat').T
 
 # ── LOAD KHAN ENSEMBLE ────────────────────────────────────────────────────────
+
 print("Loading Khan models...")
-khan_d, khan_vp, khan_vs, khan_rho = [], [], [], []
+# 欄位: 0=Depth 1=Vp 2=Vs 3=Rho 4=T 5=g 6=P
+COL_DEPTH, COL_VP, COL_VS, COL_RHO, COL_T, COL_G, COL_P = range(7)
+
+khan_d, khan_vp, khan_vs, khan_rho, khan_T = [], [], [], [], []
 for fpath in sorted(glob.glob(f'{KHAN_MODEL_DIR}/Model_*.txt')):
     try:
         d = np.loadtxt(fpath, comments='#')
-        mask = (d[:,2] > 0.01) & (d[:,0] <= DEPTH_MAX)
+        mask = d[:, COL_DEPTH] <= DEPTH_MAX 
         if mask.sum() < 5: continue
-        khan_d.append(d[mask,0]); khan_vp.append(d[mask,1])
-        khan_vs.append(d[mask,2]); khan_rho.append(d[mask,3])
+        khan_d.append(d[mask, COL_DEPTH])
+        khan_vp.append(d[mask, COL_VP])
+        khan_vs.append(d[mask, COL_VS])
+        khan_rho.append(d[mask, COL_RHO])
+        khan_T.append(d[mask, COL_T])
     except:
         continue
 print(f"  {len(khan_d)} Khan models")
-
-Z = np.linspace(0, DEPTH_MAX, 500)
 def khan_stats(vals):
     mat = np.full((len(khan_d), len(Z)), np.nan)
     for i, (z, v) in enumerate(zip(khan_d, vals)):
@@ -164,28 +180,34 @@ best_npz = best_ng['npz']
 ng_P     = best_npz['P_GPa']
 ng_depth = best_npz['depth_km']
 
-# ── LOAD HeFESTo BEST ─────────────────────────────────────────────────────────
-print(f"\nSearching best in {HEF_PREFIX}...")
-hf = find_best(MCMC_BASE_DIR, HEF_PREFIX)
-print(f"  {os.path.basename(hf['chain_dir'])}  step={hf['step']}  misfit={hf['misfit']:.4f}")
-
-hf_npz = np.load(f"{hf['chain_dir']}/profile_s{hf['step']:05d}.npz")
-has_hf_bml = 'bml_depth_km' in hf_npz.files
-
-hf_man = {'depth': hf_npz['depth_km'], 'T': hf_npz['T_K'],
-          'Vp': hf_npz['Vp'], 'Vs': hf_npz['Vs'], 'rho': hf_npz['rho']}
-
-if has_hf_bml:
-    hf_bml_depth = hf_npz['bml_depth_km']
-    hf_bml_Vp    = hf_npz['bml_Vp']
-    hf_bml_Vs    = hf_npz['bml_Vs']
-    hf_bml_rho   = hf_npz['bml_rho']
-    hf_bml_T     = hf_npz['bml_T_K']
-    hf_oc        = float(hf_npz['bml_outer_core_depth_abs'][0])
-
-# Khan crust splice for best nGibbs
 m_shal = Z <= SPLICE_DEPTH
 m_deep = ng_depth > SPLICE_DEPTH
+
+# ── LOAD HeFESTo BEST ─────────────────────────────────────────────────────────
+
+hf = None
+hf_man = None
+has_hf_bml = False
+
+if PLOT_HEFESTO:
+    print(f"\nSearching best in {HEF_PREFIX}...")
+    hf = find_best(MCMC_BASE_DIR, HEF_PREFIX)
+    print(f"  {os.path.basename(hf['chain_dir'])}  step={hf['step']}  misfit={hf['misfit']:.4f}")
+
+    # profile npz of the best step (same format as the nGibbs profiles)
+    hf_npz = np.load(f"{hf['chain_dir']}/profile_s{hf['step']:05d}.npz")
+    has_hf_bml = 'bml_depth_km' in hf_npz.files
+
+    hf_man = {'depth': hf_npz['depth_km'], 'T': hf_npz['T_K'],
+              'Vp': hf_npz['Vp'], 'Vs': hf_npz['Vs'], 'rho': hf_npz['rho']}
+
+    if has_hf_bml:
+        hf_bml_depth = hf_npz['bml_depth_km']
+        hf_bml_Vp    = hf_npz['bml_Vp']
+        hf_bml_Vs    = hf_npz['bml_Vs']
+        hf_bml_rho   = hf_npz['bml_rho']
+        hf_bml_T     = hf_npz['bml_T_K']
+        hf_oc        = float(hf_npz['bml_outer_core_depth_abs'][0])
 
 # ── PLOT ──────────────────────────────────────────────────────────────────────
 fig, axes = plt.subplots(1, 4, figsize=(22, 10), gridspec_kw={'wspace': 0.45})
@@ -194,21 +216,20 @@ fig.patch.set_facecolor('#FAFAFA')
 # colours
 C_NG  = '#C0392B'   # nGibbs
 C_HF  = '#2C3E50'   # HeFESTo
-C_SAM = '#E74C3C'   # Samuel
-C_VP  = '#4198B9'   # Khan Vp
-C_VS  = '#97795D'   # Khan Vs
+C_SAM = '#708090'   # Samuel
+C_KH  = '#4198B9'   # Khan Vp
 C_RHO = '#35838D'   # Khan rho
 
 panel_cfg = [
     # (xlabel, khan_vals, khan_med, p16, p84, khan_color, vp_key, bml_vp_key)
-    ('Vp (km/s)',  khan_vp,  vp_med,  vp_p16,  vp_p84,  C_VP,  'Vp',  'bml_Vp'),
-    ('Vs (km/s)',  khan_vs,  vs_med,  vs_p16,  vs_p84,  C_VS,  'Vs',  'bml_Vs'),
+    ('Vp (km/s)',  khan_vp,  vp_med,  vp_p16,  vp_p84,  C_KH,  'Vp',  'bml_Vp'),
+    ('Vs (km/s)',  khan_vs,  vs_med,  vs_p16,  vs_p84,  C_KH,  'Vs',  'bml_Vs'),
     ('ρ (g/cm³)', khan_rho, rho_med, rho_p16, rho_p84, C_RHO, 'rho', 'bml_rho'),
 ]
 sam_vals = [sam_vp/1000, sam_vs/1000, sam_rho/1000]
 sam_deps = [r2d(dep_vp),  r2d(dep_vs),  r2d(dep_rho)]
-hf_vals  = ([hf_man['Vp'], hf_man['Vs'], hf_man['rho']] if hf_man else [None]*3)
-hf_bml_vals = ([hf_bml_Vp, hf_bml_Vs, hf_bml_rho] if has_hf_bml else [None]*3)
+hf_vals  = ([hf_man['Vp'], hf_man['Vs'], hf_man['rho']] if (PLOT_HEFESTO and hf_man) else [None]*3)
+hf_bml_vals = ([hf_bml_Vp, hf_bml_Vs, hf_bml_rho] if (PLOT_HEFESTO and has_hf_bml) else [None]*3)
 
 for i, (ax, (xlabel, kvals, med, p16, p84, kc, vkey, bvkey),
         sv, sd, hv, hbv) in enumerate(
@@ -287,6 +308,11 @@ ax.plot(sam_T,   r2d(dep_T),   color='#2980B9', lw=2.0, label='Samuel 2023 T')
 ax.plot(sam_sol, r2d(dep_sol), color='orange',   lw=1.5, ls='--', label='Solidus')
 ax.plot(sam_liq, r2d(dep_liq), color='brown',    lw=1.5, ls='--', label='Liquidus')
 
+T_med, T_p16, T_p84 = khan_stats(khan_T)
+# 在 Panel 4 迴圈前加：
+ax.fill_betweenx(Z, T_p16, T_p84, color='#4198B9', alpha=0.15, label='Khan T 16-84%')
+ax.plot(T_med, Z, color='#4198B9', lw=1.5, ls='-', label='Khan T median')
+
 # nGibbs top-20 T (thin)
 for p in ng_profiles[1:]:
     npz = p['npz']
@@ -301,11 +327,15 @@ ax.plot(T_best, d_best, color='#E67E22', lw=2.5, zorder=5,
         label=f'nGibbs best T')
 
 # HeFESTo T
-if hf_man:
+if PLOT_HEFESTO and hf_man:
     hf_T_full = np.concatenate([hf_man['T'], hf_bml_T]) if has_hf_bml else hf_man['T']
     hf_d_full = np.concatenate([hf_man['depth'], hf_bml_depth]) if has_hf_bml else hf_man['depth']
-    ax.plot(hf_T_full, hf_d_full, color=C_HF, lw=2.0, ls='-.', zorder=6,
-            label='HeFESTo T')
+    ax.plot(hf_T_full, hf_d_full, color=C_HF, lw=2.0, ls='-.', zorder=6, label='HeFESTo T')
+
+if PLOT_HEFESTO and has_hf_bml:
+    ax.axhline(hf_oc, color=C_HF, ls=':', lw=1.5, alpha=0.8)
+    ax.text(0.02, hf_oc+10, f'HeFESTo outer core\n{hf_oc:.0f} km',
+            transform=ax.get_yaxis_transform(), fontsize=7, color=C_HF, va='top')
 
 # outer core + BML markers
 if 'bml_depth_km' in best_npz.files:
@@ -343,22 +373,16 @@ axr.tick_params(axis='y', colors='gray', length=4)
 for sp in axr.spines.values(): sp.set_linewidth(2.0)
 
 # ── TITLE ─────────────────────────────────────────────────────────────────────
-def fmt(p):
-    if not p: return ''
-    return (f"T_lit={p.get('T_lit',0):.0f}K  P_lit={p.get('P_lit',0):.2f}GPa  "
-            f"Mg#={p.get('Mg#',0):.3f}  T_core={p.get('T_core',0):.0f}K  "
-            f"Mg#_bulk={p.get('Mg#_bulk_bml',0):.3f}  BML={p.get('BML_thickness',0):.0f}km")
-
-fig.suptitle(
-    f'Mars Mantle+BML: nGibbs (top {len(ng_profiles)}) vs HeFESTo vs Samuel 2023 vs Khan 2023\n'
+title_str = (
+    f'Mars Mantle+BML: nGibbs (top {len(ng_profiles)}) vs Samuel 2023 vs Khan 2023\n'
     f"nGibbs best : {os.path.basename(ng_profiles[0]['chain_dir'])}  "
     f"step {ng_profiles[0]['step']}  misfit={ng_profiles[0]['misfit']:.4f}  "
-    f"|  {fmt(ng_profiles[0]['params'])}\n"
-    f"HeFESTo best: {os.path.basename(hf['chain_dir'])}  step {hf['step']}  "
-    f"misfit={hf['misfit']:.4f}  |  {fmt(hf['params'])}",
-    fontsize=9.5, y=1.01,
+    f"|  {fmt(ng_profiles[0]['params'])}"
 )
-
+if PLOT_HEFESTO and hf is not None:
+    title_str += (f"\nHeFESTo best: {os.path.basename(hf['chain_dir'])}  step {hf['step']}  "
+                  f"misfit={hf['misfit']:.4f}  |  {fmt(hf['params'])}")
+fig.suptitle(title_str, fontsize=9.5, y=1.01)
 out = f'/net/beno3/data1/jcchen2/mars-hefesto-runs/figures/best_fit_{CHAIN_PREFIX}_top{TOP_N}.png'
 plt.savefig(out, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
 print(f"\nSaved: {out}")

@@ -6,38 +6,6 @@ Created on Wed Jul 29 18:58:20 2026
 @author: chingchen
 """
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Mars BML MCMC — 合併後的後驗分析腳本(a35/core 版)
-合併自 a33 版(收斂診斷: R-hat/ESS、prior->posterior 收縮、KL、chain 健檢)
-與 a34 版(後驗圖: marginals、corner、misfit/moi 相關性)。
-讀檔同時支援 chain.json(a31-a33)與 chain.jsonl(a34 起)。
-
-a35 更新(對應 70.mcmc_core_nGibbs / a26 forward model):
-  * 第七個參數 w_S(核 S 重量分率)進 PARAMS/PRIOR/CUR_STEP,
-    marginals / corner / shrinkage / R-hat 自動涵蓋
-  * PRIOR 同步 runtime:T_core (1550, 3600)、Mg# (0.50, 0.90)
-    (舊版分析腳本的 Mg# 0.86 與 a34 runtime 0.90 不一致,已修正)
-  * EXTRA_KEYS 加入核診斷量:R_ic_km / ric_sigma / rho_core_mean /
-    Vp_core_cmb / P_center_core / T_center_core
-  * 新 TOGGLE 'core_diag':T_core 排除機率表、ICB 溫度計後驗圖
-    (T_core-R_ic + Bi 帶)、w_S vs 地球化學上限、posterior predictive
-    (Vp_cmb vs Irving、rho_mean vs MSL 帶)
-  * 讀舊鏈(無 w_S / 核欄位)不會爆:params 用 .get,核圖自動跳過
-  * 圖格從 2x3 改 2x4(七參數),多餘的子圖隱藏
-
-a36 更新(對應 70.mcmc_core_nGibbs 自洽結構版):
-  * 第八個參數 R_cmb(核半徑)進 PARAMS/PRIOR/CUR_STEP;CMB 深度不再是常數,
-    改由 post['cmb_depth_km'] = MARS_RADIUS - R_cmb 逐樣本算
-  * PREFIX 必須指定 chain_a36A 或 chain_a36B —— A/B 是兩套不同的核 EoS
-    (A = all-Liu Gamma mixing, B = Liu Fe + Sakai FeS Margules),不可合併
-  * EXTRA_KEYS 移除 rho_S_interface(a36 不再輸出),加入自洽結構診斷:
-    P_cmb / P_bml_top / z_lit_km / gap_min / bml_n_pass / sc_n_iter / sc_dP / sc_dz_lit
-  * 新增 TOGGLE 'struct_diag':自洽迭代收斂、gap_min(內核撐滿液核)檢查
-  * MIN_STEPS 提高到 300:a36 有一批 30-90 步的短鏈
-"""
-
 import json, glob, os
 import numpy as np
 from scipy.stats import spearmanr
@@ -49,10 +17,10 @@ import matplotlib.patches as mpatches
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain'
 OUT_DIR     = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
-PREFIX      = 'chain_a41B'   # 'chain_a36A' 或 'chain_a36B',不要寫 'chain_a36'
+PREFIX      = 'chain_a60_TA'   # 'chain_a36A' 或 'chain_a36B',不要寫 'chain_a36'
 PHASE_TABLE = '/Users/chingchen/Desktop/HeFESTo/mcmcfigures/bml_phase_table_prior_a31.npz'
 
-if PREFIX in ('chain_a36', 'chain_a36_'):
+if PREFIX in ('chain_a36', 'chain_a36_',):
     raise SystemExit(
         "PREFIX='chain_a36' 會同時抓到 a36A 與 a36B。\n"
         "  A = all-Liu (Gamma mixing), B = Liu Fe + Sakai FeS (Margules),\n"
@@ -60,12 +28,12 @@ if PREFIX in ('chain_a36', 'chain_a36_'):
 
 
 
-EXCLUDE = ['chain_a37A_01','chain_a38A_01'] 
+EXCLUDE = ['chain_a37A_01','chain_a38A_01','chain_a47B_14','chain_a54B_00','chain_a54B_09','chain_a60_EH45_00' ] 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
 BURNIN_FRAC = 0.4
 DROP_LAST   = 1
-MIN_STEPS   = 20        
+MIN_STEPS   = 400
 SAVE        = False
 
 fontsize = 14             # 全域字級,tick_params 一律用 labelsize=14
@@ -134,7 +102,8 @@ EXTRA_KEYS = ['misfit', 'misfit_tt', 'misfit_solidus', 'mass_sigma', 'moi_sigma'
               'P_center_core', 'T_center_core',
               # a36 自洽結構診斷(rho_S_interface 在 a36 已不輸出,移除)
               'P_cmb', 'P_bml_top', 'z_lit_km', 'gap_min', 'bml_n_pass',
-              'sc_n_iter', 'sc_dP', 'sc_dz_lit']
+              'sc_n_iter', 'sc_dP', 'sc_dz_lit', 
+              'tt_per_datum', 'geo_sum', 'misfit_reduced', 'n_data']
 
 # ── 各段落開關(1=執行, 0=跳過)─────────────────────────────────────────────
 TOGGLE = {
@@ -148,6 +117,7 @@ TOGGLE = {
     'struct_diag':           1,   # 圖L  a36 自洽結構:R_cmb/CMB 深度、迭代收斂、gap_min
     'prior_post_shrinkage':  1,   # 圖J + 收縮量化表 + KL + edge check
     'convergence_diag':      1,   # chain length / R-hat / ESS / running mean / transitions
+    'corner_tt_per':         1,
 }
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -385,6 +355,10 @@ if TOGGLE['corner_misfit_tt']:
     plot_corner('misfit_tt', 'plasma', 'TT misfit', '04d_corner_misfit_tt')
 if TOGGLE['corner_moi_sigma']:
     plot_corner('moi_sigma', 'magma', 'MoI sigma', '04e_corner_moi_sigma')
+
+if TOGGLE['corner_tt_per']:
+    plot_corner('tt_per_datum', 'plasma', r'TT misfit / datum ($\sigma$)',
+                '04f_corner_tt_per_datum')
 
 
 # ══════════════════════════════════════════════════════════════════════════

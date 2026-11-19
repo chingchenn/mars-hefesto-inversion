@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 # ── 設定 ─────────────────────────────────────────────────────────────────────
 CHAIN_DIR = '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain'
 OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
-PREFIX    = 'chain_a41B'
+PREFIX    = 'chain_a61t_YM'
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 

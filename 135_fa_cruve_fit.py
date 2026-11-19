@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 # -*- coding: utf-8 -*-
 """
 Created on Thu Oct 29 15:24:48 2026
@@ -31,6 +32,8 @@ Created on Thu Oct 29 15:24:48 2026
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve, brentq, least_squares
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
@@ -158,7 +161,7 @@ a2.legend(fontsize=11)
 for a in ax:
     a.tick_params(labelsize=14)
 fig.tight_layout()
-fig.savefig('135_fa_curve_fit.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '135_fa_curve_fit.png'), dpi=150)
 
 # ── figure 2: isobaric sections with the new calibration ───────────────
 plines = open(PLOT_SRC).read().splitlines()
@@ -205,5 +208,5 @@ for axi, P in zip(axes.ravel(), P_SECTIONS):
 fig.suptitle(f'Fitted Fa curve (a = {A_FIT:.2f} GPa, c = {C_FIT:.2f}), constant shift {SHIFT_NEW:.0f} K',
              fontsize=16)
 fig.tight_layout()
-fig.savefig('135_sections_fitted.png', dpi=130)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '135_sections_fitted.png'), dpi=130)
 plt.show()

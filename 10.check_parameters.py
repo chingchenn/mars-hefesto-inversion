@@ -16,7 +16,8 @@ import json
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import RUNS_DIR
+from mars_config import RUNS_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ============================================================
 # 讀取所有 model 的參數和狀態
@@ -106,7 +107,7 @@ fig.suptitle(f'HeFESTo 參數分布：成功 vs 失敗\n'
              f'失敗率 {len(failed_params)/(len(success_params)+len(failed_params))*100:.1f}%)',
              fontsize=13)
 plt.tight_layout()
-plt.savefig(os.path.join(RUNS_DIR, "param_histogram.png"),
+if SAVE_FIG: plt.savefig(os.path.join(FIG_DIR, "param_histogram.png"),
             dpi=150, bbox_inches='tight')
 plt.show()
 print(f"\n圖片已儲存至 {RUNS_DIR}/param_histogram.png")

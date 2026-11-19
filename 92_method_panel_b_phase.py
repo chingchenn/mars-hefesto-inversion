@@ -17,12 +17,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import brentq, fsolve
 import os
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ── config ────────────────────────────────────────────────────────────────────
 FORWARD_FILE = f'{HERE}/26fall_main_mcmc.py'
 REP_JSON     = '90_rep_model.json'
-OUT_PDF      = '92_panel_b.pdf'
+OUT_PDF      = f'{FIG_DIR}/92_panel_b.pdf'
 RED, C_LOOP  = '#9b2d2d', 'C1'
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
@@ -64,6 +66,6 @@ ax.set_title(f'Fo–Fa at $P_{{int}}$ = {P:.1f} GPa', fontsize=14)
 ax.legend(loc='lower right', fontsize=12, frameon=False)
 ax.tick_params(labelsize=14)
 fig.tight_layout()
-fig.savefig(OUT_PDF)
-fig.savefig(OUT_PDF.replace('.pdf', '.png'), dpi=200)
+if SAVE_FIG: fig.savefig(OUT_PDF)
+if SAVE_FIG: fig.savefig(OUT_PDF.replace('.pdf', '.png'), dpi=200)
 print(f"saved {OUT_PDF}")

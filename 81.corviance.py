@@ -22,7 +22,8 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--prefix',    required=True)              # e.g. chain_a60_YM20
@@ -36,7 +37,7 @@ a = ap.parse_args()
 RUN     = a.prefix.replace('chain_', '')
 OUT_NPZ = f'prop_cov_{RUN}.npz'
 START   = f'start_{RUN}'
-FIG     = f'figures/prop_corr_{RUN}.png'
+FIG     = f'{FIG_DIR}/prop_corr_{RUN}.png'
 
 # order must match PRIOR in the main script (propose() reads the Cholesky vector in this order)
 PARAM_ORDER = ('T_lit', 'P_lit', 'Mg#', 'T_core',
@@ -140,5 +141,5 @@ cb = fig.colorbar(im, ax=ax)
 cb.ax.tick_params(labelsize=14)
 ax.set_title(f'{a.prefix}  posterior correlation  (n={n})', fontsize=14)
 fig.tight_layout()
-fig.savefig(FIG, dpi=150)
+if SAVE_FIG: fig.savefig(FIG, dpi=150)
 print(f'saved {FIG}')

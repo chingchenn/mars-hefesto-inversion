@@ -12,15 +12,13 @@ import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import fsolve
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ── 設定 ───────────────────────────────────────────────────────────────────────
-CHAIN_DIR = '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc'
 CHAIN_DIR = MCMC_DIR
 PREFIX    = 'chain_a23'
 BURNIN    = 0.1   # 丟掉前 30%
-OUT_DIR   = '/net/beno3/data1/jcchen2/mars-hefesto-runs/figures'
-OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR   = FIG_DIR
 # ──────────────────────────────────────────────────────────────────────────────
 
 os.makedirs(OUT_DIR, exist_ok=True)

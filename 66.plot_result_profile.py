@@ -35,7 +35,7 @@ import os, glob, json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 MCMC_BASE_DIR  = MCMC_DIR
@@ -44,7 +44,7 @@ HEF_PREFIX     = 'chain_a21'
 SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
                   'Nature_Samuel/METADATA_BML/DATA_FIG1')
 
-OUT_DIR        = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR        = FIG_DIR
 
 DEPTH_MAX      = 1800        # Khan / Samuel 對照資料的深度上限(Z 網格用)
 SPLICE_DEPTH   = 100.0
@@ -69,7 +69,7 @@ PLOT_PAD       = 60.0        # km
 PLOT_CORE    = True
 
 PLOT_HEFESTO = False
-SAVE         = False
+SAVE_FIG     = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 if CHAIN_PREFIX in ('chain_a36', 'chain_a36_', 'chain_a37', 'chain_a37_'):
     raise SystemExit(
@@ -649,7 +649,7 @@ if PLOT_HEFESTO and hf is not None:
     title_str += (f"\nHeFESTo best: {os.path.basename(hf['chain_dir'])}  step {hf['step']}  "
                   f"misfit={hf['misfit']:.4f}  |  {fmt(hf['params'])}")
 fig.suptitle(title_str, fontsize=14)
-if SAVE:
+if SAVE_FIG:
     out = os.path.join(OUT_DIR, f'best_fit_{CHAIN_PREFIX}_top{TOP_N}.png')
     plt.savefig(out, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
     print(f"\nSaved: {out}")

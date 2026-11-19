@@ -8,11 +8,11 @@ Created on Tue Nov  3 21:58:16 2026
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 CHAIN_DIR = MCMC_DIR
-OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
-SAVE      = False
+OUT_DIR   = FIG_DIR
+SAVE_FIG  = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 fontsize  = 14
 
 # 組成 -> [(標籤, prefix)],舊在前、新在後;prefix=None 表示沒有舊 run
@@ -169,7 +169,7 @@ def overlay(comp, old, new, lo, ln):
     axes[0].legend(fontsize=12)
     fig.suptitle(f'{comp}: {lo} (grey) vs {ln} (red)', fontsize=fontsize + 2)
     fig.tight_layout()
-    if SAVE:
+    if SAVE_FIG:
         fig.savefig(os.path.join(OUT_DIR, f'137_{comp}_overlay.png'), dpi=150)
     plt.show()
 
@@ -195,7 +195,7 @@ def solidus_fig(news):
         ax.tick_params(labelsize=14)
         ax.legend(fontsize=10)
     fig.tight_layout()
-    if SAVE:
+    if SAVE_FIG:
         fig.savefig(os.path.join(OUT_DIR, '137_dT_solidus.png'), dpi=150)
     plt.show()
 

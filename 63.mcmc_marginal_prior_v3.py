@@ -22,7 +22,7 @@
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # config
@@ -36,7 +36,7 @@ DROP_LAST   = 1                    # last record can be half written
 MIN_STEPS   = 5
 H_STATE_TOL = 1.0                  # km, matches 63 v4 and 70's H_MIN_LAYER
 
-SAVE = False
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 FS   = 14
 TICK = 14
 
@@ -494,6 +494,6 @@ if PANEL_S:
         lh.set_alpha(1.0)
 
 fig.tight_layout()
-if SAVE:
-    fig.savefig(TAG + 'I_bulk_MgSi_FeSi.png', dpi=150)
+if SAVE_FIG:
+    fig.savefig(os.path.join(FIG_DIR, TAG + 'I_bulk_MgSi_FeSi.png'), dpi=150)
 plt.show()

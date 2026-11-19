@@ -28,6 +28,7 @@ import numpy as np
 """共用：讀 chain.json（含 salvage）、三態分類、ESS 估計。"""
 import os, json, glob
 import numpy as np
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 
 def read_chain(path):
@@ -114,7 +115,7 @@ def pooled_ess(series_by_chain):
 SEC_YR = 3.156e7
 AGE_MARS = 4.5e9
 G_MARS = 3.72
-MAIN = '/home/jcchen2/mars-hefesto-inversion/59.mcmc_nGibbs_Mars_a25.py'
+MAIN = f'{HERE}/59.mcmc_nGibbs_Mars_a25.py'
 
 RCMF_LO, RCMF_HI = 0.25, 0.40      # 瓦解 / 懸浮的過渡區
 N_RZ = 4.65                        # Richardson-Zaki 指數

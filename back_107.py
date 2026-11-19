@@ -29,7 +29,7 @@ Created on Fri Aug 28 12:46:59 2026
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR = MCMC_DIR
@@ -51,7 +51,7 @@ N_PROFILE = 200      # 每箱抓幾個 profile npz 量界面跳躍
 
 fontsize = 14
 TICKSIZE = 14
-SAVE     = True
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # 讀鏈
@@ -246,8 +246,8 @@ ax.set_ylabel('Mg#$_{bulk,bml}$ - Mg#$_{mantle}$', fontsize=fontsize)
 ax.tick_params(labelsize=TICKSIZE)
 ax.legend(loc='lower right', fontsize=fontsize-2)
 fig.tight_layout()
-if SAVE:
-    fig.savefig('107_delta_Mg_vs_thickness.png', dpi=150)
+if SAVE_FIG:
+    fig.savefig(os.path.join(FIG_DIR, '107_delta_Mg_vs_thickness.png'), dpi=150)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -265,8 +265,8 @@ ax.set_ylabel('density', fontsize=fontsize)
 ax.tick_params(labelsize=TICKSIZE)
 ax.legend(loc='upper left', fontsize=fontsize-2)
 fig.tight_layout()
-if SAVE:
-    fig.savefig('107_Mg_BSM_vs_mantle.png', dpi=150)
+if SAVE_FIG:
+    fig.savefig(os.path.join(FIG_DIR, '107_Mg_BSM_vs_mantle.png'), dpi=150)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -284,6 +284,6 @@ if jump:
     ax.set_ylabel('Vs jump at BML top (%)', fontsize=fontsize)
     ax.tick_params(labelsize=TICKSIZE)
     fig.tight_layout()
-    if SAVE:
-        fig.savefig('107_Vs_jump_at_BML_top.png', dpi=150)
+    if SAVE_FIG:
+        fig.savefig(os.path.join(FIG_DIR, '107_Vs_jump_at_BML_top.png'), dpi=150)
     plt.show()

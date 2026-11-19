@@ -12,6 +12,7 @@ plot_raypath_final.py
 修改 CONFIG 區塊即可套用到你的 Mars 模型。
 """
 
+import os
 import numpy as np
 import matplotlib
 matplotlib.use("Agg")
@@ -21,16 +22,17 @@ from matplotlib.lines import Line2D
 from matplotlib.collections import LineCollection
 import importlib.util
 from obspy.taup import TauPyModel
+from mars_config import FIG_DIR, TAUP_WORK_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ============================================================
 # CONFIG：修改這裡
 # ============================================================
 
-MCMC_MODULE_PATH = "/home/jcchen2/mars-hefesto-inversion/21.mcmc_NPS.py"
-TAUP_MODEL_PATH  = ("/net/beno3/data1/jcchen2/"
-                    "mars-hefesto-runs/taup_models/best_fit_BML_plot.npz")
-OUTPUT_PATH      = ("/net/beno3/data1/jcchen2/"
-                    "mars-hefesto-runs/mcmc/mars_raypaths_final.png")
+MCMC_MODULE_PATH = f'{HERE}/21.mcmc_NPS.py'
+TAUP_MODEL_PATH  = f'{TAUP_WORK_DIR}/best_fit_BML_plot.npz'
+OUTPUT_PATH      = f'{FIG_DIR}/mars_raypaths_final.png'
 
 R_MARS        = 3389.5   # km
 CMB_DEPTH     = 1752.5   # km，修改成你的模型值
@@ -303,7 +305,7 @@ def main():
                  fontsize=13, fontweight='bold', pad=10)
 
     plt.tight_layout()
-    plt.savefig(OUTPUT_PATH, dpi=200, bbox_inches='tight', facecolor='white')
+    if SAVE_FIG: plt.savefig(OUTPUT_PATH, dpi=200, bbox_inches='tight', facecolor='white')
     print(f"Saved: {OUTPUT_PATH}")
 
 

@@ -42,11 +42,11 @@ import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
-from mars_config import MCMC_DIR, RUN_BASE
+from mars_config import MCMC_DIR, RUN_BASE, FIG_DIR
 
 # ── 設定 ─────────────────────────────────────────────────────────────────────
 CHAIN_DIR   = MCMC_DIR
-OUT_DIR     = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR     = FIG_DIR
 PREFIX      = 'chain_a38B'   # 'chain_a36A' 或 'chain_a36B',不要寫 'chain_a36'
 # 9x25 / 13x35 / 21x71 三種格點的三態比例差異 < 0.05%,任一皆可
 # 注意: 這張表是在 R_cmb 固定 1743.3 km 下建的。a36 把 R_cmb 放開後,
@@ -66,7 +66,7 @@ BURNIN_FRAC = 0.3
 DROP_LAST   = 1
 MIN_STEPS   = 300        # a36 有一批 30-90 步的短鏈,門檻拉高避免污染後驗
 CHENG_TC    = (2200.0, 2400.0)
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 G_MARS      = 3.72
 
 D_NO_BML = 2.0           # km, D 小於此值視為「沒有 BML」
@@ -335,7 +335,7 @@ if fig_E_region:
           f"({100*np.nanmean(w_win)/(T_HI-T_LO):.1f}% of T_core prior range)")
 
     plt.tight_layout()
-    if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'E_region_map.png'), dpi=150)
+    if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'E_region_map.png'), dpi=150)
     plt.show()
 
 
@@ -382,7 +382,7 @@ if code_vs_table:
                  fontsize=fontsize)
     style(ax); ax.legend(fontsize=10)
     plt.tight_layout()
-    if SAVE:
+    if SAVE_FIG:
         plt.savefig(os.path.join(OUT_DIR, TAG + 'H2_code_vs_table_Pmatched.png'),
                     dpi=150)
     plt.show()
@@ -500,7 +500,7 @@ if fig_G_heat_flux:
         style(axes[1])
 
         plt.tight_layout()
-        if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'G_heat_flux.png'), dpi=150)
+        if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'G_heat_flux.png'), dpi=150)
         plt.show()
 
         print("\n判讀:k 只在 log 軸上平移分布,5-95% 跨度遠大於 k 的 4 倍變化")
@@ -549,6 +549,6 @@ if fig_G2_molten_tbl:
         style(axes[1])
 
         plt.tight_layout()
-        if SAVE:
+        if SAVE_FIG:
             plt.savefig(os.path.join(OUT_DIR, TAG + 'G2_heat_flux_molten.png'), dpi=150)
         plt.show()

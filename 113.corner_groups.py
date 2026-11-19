@@ -46,6 +46,7 @@ import matplotlib.patches as mpatches
 # settings
 # ══════════════════════════════════════════════════════════════════════════
 import mars_config as cfg
+from mars_config import FIG_DIR
 CHAIN_DIR = cfg.MCMC_DIR          # figures are saved next to this script
 PREFIX    = 'chain_a64_YM20'     # main result (YM20, Hd, gravity penalty); was chain_a61t_YM20
 EXCLUDE   = []
@@ -54,7 +55,7 @@ BURNIN_FRAC = 0.4          # same as 63v2
 DROP_LAST   = 1            # last line may be half written
 MIN_STEPS   = 100          # a64 is still running; raise to 400 when finished
 H_STATE_TOL = 1.0          # km, sublayer thickness threshold for the state labels
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 PAPER       = True         # True = no suptitle (text goes into the caption)
 DROP_MGBML  = False        # False = interior 5x5 with Mg#_bulk_bml (Fig. 4b, 11/16 plan); True = 4x4
 
@@ -321,6 +322,6 @@ for gname, plist in GROUPS.items():
                       cax=cax, orientation='horizontal')
     cb.set_label('posterior PDF (normalised per panel)', fontsize=FS)
     cb.ax.tick_params(labelsize=14)
-    if SAVE:
-        fig.savefig(f'113_{PREFIX}_{gname}.png', dpi=200)
+    if SAVE_FIG:
+        fig.savefig(os.path.join(FIG_DIR, f'113_{PREFIX}_{gname}.png'), dpi=200)
     plt.show()

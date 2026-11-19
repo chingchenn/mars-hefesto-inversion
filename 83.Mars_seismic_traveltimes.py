@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 # -*- coding: utf-8 -*-
 # 85.tt_dataset_audit.py
 #
@@ -19,6 +20,7 @@
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+from mars_config import FIG_DIR
 
 plt.rcParams['font.family'] = 'PingFang TC'
 
@@ -26,7 +28,7 @@ plt.rcParams['font.family'] = 'PingFang TC'
 CHAIN       = 'IPGP'      # 'IPGP' 或 'ETH'。走時與定位必須來自同一條鏈。
 SIGMA_MODE  = 'scs_only'  # 'raw' | 'scs_only' | 'all'
 SIG_FLOOR   = 2.0
-SAVE_FIG    = True
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 fontsize    = 14
 
 # sigma_pick 相位種類固定值
@@ -525,5 +527,5 @@ if SAVE_FIG:
     ax2.legend(loc='lower right', fontsize=11)
 
     fig.tight_layout()
-    fig.savefig('85_tt_dataset_audit.png', dpi=150)
+    fig.savefig(os.path.join(FIG_DIR, '85_tt_dataset_audit.png'), dpi=150)
     plt.show()

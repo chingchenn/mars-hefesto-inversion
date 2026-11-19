@@ -20,18 +20,18 @@ MCMC 鏈的三張診斷圖:trace / misfit history / acceptance rate。
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ── 設定 ─────────────────────────────────────────────────────────────────────
 CHAIN_DIR = MCMC_DIR
-OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR   = FIG_DIR
 PREFIX    = 'chain_a61t_YM'
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
 DROP_LAST = 1
 MIN_STEPS = 5      # 設 400 會剔掉 chain_13(396 步);trace 圖希望看到全部鏈
-SAVE      = False
+SAVE_FIG  = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 PARAMS = ['T_lit', 'P_lit', 'Mg#', 'T_core', 'Mg#_bulk_bml', 'BML_thickness']
 LABELS = ['T_lit (K)', 'P_lit (GPa)', 'Mg# (mantle)', 'T_core (K)',
@@ -159,7 +159,7 @@ for i, (param, label) in enumerate(zip(PARAMS, LABELS)):
 axes[-1].set_xlabel('Step', fontsize=fontsize)
 axes[-2].set_xlabel('Step', fontsize=fontsize)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + '01_trace.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + '01_trace.png'), dpi=150)
 plt.show()
 
 
@@ -189,7 +189,7 @@ for ax, (key, label) in zip(axes, MISFIT_KEYS):
         ax.spines[axis].set_linewidth(bwith)
 axes[-1].set_xlabel('Step', fontsize=fontsize)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + '02_misfit_history.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + '02_misfit_history.png'), dpi=150)
 plt.show()
 
 
@@ -207,5 +207,5 @@ ax.tick_params(labelsize=14)
 for axis in ['top', 'bottom', 'left', 'right']:
     ax.spines[axis].set_linewidth(bwith)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + '03_accept_rate.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + '03_accept_rate.png'), dpi=150)
 plt.show()

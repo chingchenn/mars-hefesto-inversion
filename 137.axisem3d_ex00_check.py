@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 # -*- coding: utf-8 -*-
 # 137: AxiSEM3D install check, Example 00 (global 1D PREM, 50 s, 2011 Virginia Mw 5.8)
 #
@@ -14,7 +15,8 @@
 # Compare the figure with $AXISEM3D_DIR/examples/00_global_1D/figures/ex00_seismograms_ANMO.png
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import AXISEM3D_DIR
+from mars_config import AXISEM3D_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 STA   = 'IU.ANMO'
 D     = f'{AXISEM3D_DIR}/examples/00_global_1D/output/stations/global_seismic_network_GSN'
@@ -35,5 +37,5 @@ ax[2].set_xlabel('Time after origin (s)', fontsize=14)
 ax[2].set_xlim(t[0], t[-1])
 ax[0].set_title(f'AxiSEM3D Example 00, {STA}, PREM 50 s', fontsize=14)
 fig.tight_layout()
-fig.savefig('137_axisem3d_ex00_ANMO.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '137_axisem3d_ex00_ANMO.png'), dpi=200)
 plt.show()

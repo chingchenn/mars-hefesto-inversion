@@ -53,7 +53,7 @@ MISFIT_KEY   = 'misfit_tt'               # or 'misfit' (total, includes penaltie
 N_SCATTER    = 6000
 N_MC_PRIOR   = 2_000_000
 SEED         = 0
-SAVE         = True
+SAVE_FIG     = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 OUT_DIR      = cfg.FIG_DIR
 
 PRIOR = {                                # must match 26fall_main_mcmc_a63.py
@@ -291,7 +291,7 @@ for p in ax:
 prior_tag = PRIOR_PREFIX if PRIOR_PREFIX else 'analytic uniform prior'
 fig.suptitle(f'{PREFIX}   (prior: {prior_tag})', fontsize=FS)
 fig.tight_layout()
-if SAVE:
+if SAVE_FIG:
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, f'76_{PREFIX}_bml_requirement.png')
     fig.savefig(out, dpi=200)

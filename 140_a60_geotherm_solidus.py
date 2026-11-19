@@ -12,7 +12,8 @@ import json
 import types
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -181,14 +182,14 @@ ax[0].set_ylim(P_GRID[-1], P_GRID[0])    # pressure increases downward (shared y
 ax[0].set_ylabel('P (GPa)', fontsize=14)
 ax[0].legend(loc='upper right', fontsize=9)
 fig.tight_layout()
-fig.savefig(f'140_{RUN}_geotherm_solidus.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, f'140_{RUN}_geotherm_solidus.png'), dpi=200)
 print(f"\nsaved 140_{RUN}_geotherm_solidus.png")
 
 # second figure: shallow zoom, where the solidus penalty acts
 for a in ax:
     a.set_xlim(*SHALLOW_T)
 ax[0].set_ylim(SHALLOW_P[1], SHALLOW_P[0])
-fig.savefig(f'140_{RUN}_geotherm_solidus_shallow.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, f'140_{RUN}_geotherm_solidus_shallow.png'), dpi=200)
 print(f"saved 140_{RUN}_geotherm_solidus_shallow.png")
 
 # restore the full range so the figure shown on screen is the full-depth one

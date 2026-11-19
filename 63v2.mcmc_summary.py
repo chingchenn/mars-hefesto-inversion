@@ -30,6 +30,7 @@ import matplotlib.patches as mpatches
 # settings
 # ══════════════════════════════════════════════════════════════════════════
 import mars_config as cfg
+from mars_config import FIG_DIR
 CHAIN_DIR = cfg.MCMC_DIR          # figures are saved next to this script
 
 PREFIX       = 'chain_a61t_YM20'                        # main run
@@ -40,7 +41,7 @@ EXCLUDE     = ['chain_a60_EH45_00']
 BURNIN_FRAC = 0.4
 DROP_LAST   = 1
 MIN_STEPS   = 400
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 N_SCATTER   = 20000    # points per scatter plot (subsampled for speed)
 
 PRIOR = {
@@ -326,8 +327,8 @@ for c, nm in enumerate(names):
 # Fig A  prior vs posterior (draft of paper Fig. 3)
 # ══════════════════════════════════════════════════════════════════════════
 def save(fig, tag):
-    if SAVE:
-        fig.savefig(f'63v2_{PREFIX}_{tag}.png', dpi=200)
+    if SAVE_FIG:
+        fig.savefig(os.path.join(FIG_DIR, f'63v2_{PREFIX}_{tag}.png'), dpi=200)
     plt.show()
 
 

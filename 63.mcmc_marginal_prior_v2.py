@@ -21,13 +21,13 @@ import numpy as np
 from scipy.stats import spearmanr
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # 設定
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR = MCMC_DIR
-OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR   = FIG_DIR
 PREFIX    = 'chain_a61t'
 
 if PREFIX in ('chain_a36', 'chain_a36_'):
@@ -44,7 +44,7 @@ GEO_SWITCH  = 5.0
 BURNIN_PAD  = 200
 DROP_LAST   = 1
 MIN_STEPS   = 5
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 fontsize    = 14
 TICKSIZE    = 14
 
@@ -328,7 +328,7 @@ if TOGGLE['marginals']:
         ax.set_xlabel(label, fontsize=fontsize); ax.set_ylabel('count', fontsize=fontsize)
         ax.tick_params(labelsize=TICKSIZE); ax.legend(fontsize=9)
     plt.tight_layout()
-    if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + '04_marginals.png'), dpi=150)
+    if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + '04_marginals.png'), dpi=150)
     plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -386,7 +386,7 @@ def plot_corner(color_key, cmap, cbar_label, suffix, discrete=False):
         cbar = fig.colorbar(sm, cax=cax)
         cbar.set_label(cbar_label, fontsize=fontsize)
         cbar.ax.tick_params(labelsize=TICKSIZE)
-    if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + suffix + '.png'), dpi=150)
+    if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + suffix + '.png'), dpi=150)
     plt.show()
 
 if TOGGLE['corner_misfit']:
@@ -499,7 +499,7 @@ if TOGGLE['core_diag']:
             ax.tick_params(labelsize=TICKSIZE)
         fig.suptitle(f'{PREFIX}  Core diagnostics', fontsize=fontsize + 1)
         fig.tight_layout()
-        if SAVE: fig.savefig(os.path.join(OUT_DIR, TAG + 'K_core_diag.png'), dpi=150)
+        if SAVE_FIG: fig.savefig(os.path.join(OUT_DIR, TAG + 'K_core_diag.png'), dpi=150)
         plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -565,7 +565,7 @@ if TOGGLE['struct_diag']:
             ax.tick_params(labelsize=TICKSIZE)
         fig.suptitle(f'{PREFIX}  structure diagnostics', fontsize=fontsize + 1)
         fig.tight_layout()
-        if SAVE: fig.savefig(os.path.join(OUT_DIR, TAG + 'L_struct_diag.png'), dpi=150)
+        if SAVE_FIG: fig.savefig(os.path.join(OUT_DIR, TAG + 'L_struct_diag.png'), dpi=150)
         plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -626,7 +626,7 @@ if TOGGLE['prior_post_shrinkage']:
         ax.tick_params(labelsize=TICKSIZE)
     fig.suptitle(f'{PREFIX}   grey line = prior', fontsize=fontsize + 1)
     fig.tight_layout()
-    if SAVE: fig.savefig(os.path.join(OUT_DIR, TAG + 'J_prior_post.png'), dpi=150)
+    if SAVE_FIG: fig.savefig(os.path.join(OUT_DIR, TAG + 'J_prior_post.png'), dpi=150)
     plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -771,7 +771,7 @@ if TOGGLE['convergence_diag']:
         ax.tick_params(labelsize=TICKSIZE)
     fig.suptitle(f'{PREFIX} running mean per chain', fontsize=fontsize + 2)
     fig.tight_layout()
-    if SAVE: fig.savefig(os.path.join(OUT_DIR, TAG + 'I_running_mean.png'), dpi=150)
+    if SAVE_FIG: fig.savefig(os.path.join(OUT_DIR, TAG + 'I_running_mean.png'), dpi=150)
     plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -794,5 +794,5 @@ if TOGGLE['acceptance_window']:
     ax.set_title(f'{PREFIX} sliding-window acceptance (dotted = burn-in cut)',
                  fontsize=fontsize)
     plt.tight_layout()
-    if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'M_acceptance_window.png'), dpi=150)
+    if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'M_acceptance_window.png'), dpi=150)
     plt.show()

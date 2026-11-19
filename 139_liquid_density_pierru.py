@@ -13,6 +13,8 @@ from scipy.optimize import brentq
 import openpyxl
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ── config ────────────────────────────────────────────────────────────────────
 HERE         = os.path.dirname(os.path.abspath(__file__))
@@ -111,5 +113,5 @@ h = [Line2D([], [], color='k', lw=2.4, ls=LS['this'], label='this work (binary F
 h += [Line2D([], [], color=cmap(cnorm(T)), lw=2.4, label=f'{T} K') for T in T_ALL]
 ax[0].legend(handles=h, loc='lower left', fontsize=8, ncol=2)
 fig.tight_layout()
-fig.savefig('139_liquid_density_pierru.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '139_liquid_density_pierru.png'), dpi=200)
 print("\nsaved 139_liquid_density_pierru.png")

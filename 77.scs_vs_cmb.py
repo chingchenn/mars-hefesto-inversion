@@ -38,7 +38,7 @@ DROP_LAST   = 1
 MIN_STEPS   = 100            # a64 is still running; raise to 400 when finished
 H_STATE_TOL = 1.0
 STATE_MIN_N = 50
-SAVE        = True
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 OUT_DIR     = cfg.FIG_DIR
 FS          = 14
 
@@ -253,7 +253,7 @@ for ax in axs:
 axs[-1].set_xlabel('radius (km)', fontsize=FS)
 
 fig.tight_layout(rect=[0, 0, 1, 0.96])
-if SAVE:
+if SAVE_FIG:
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, f'77_{PREFIX}_radius.png')
     fig.savefig(out, dpi=200)

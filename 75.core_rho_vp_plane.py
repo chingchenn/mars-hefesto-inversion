@@ -41,7 +41,7 @@ MIN_STEPS   = 100                 # a63 is still early (~300 steps per chain)
 H_MIN_BML   = 1.0                   # km, below this the state is 'none'
 N_PLOT      = 4000                  # posterior points per panel (subsampled)
 SEED        = 0
-SAVE        = True
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 OUT_DIR     = cfg.FIG_DIR
 TAG         = '75_' + PREFIX
 
@@ -309,7 +309,7 @@ ax[1].set_xlim(left=min(ax[1].get_xlim()[0], 6.1))
 fig.suptitle(f'{PREFIX}   (core EoS route {route};  grey: constant $K_S=\\rho V_P^2$, GPa)',
              fontsize=FS)
 fig.tight_layout()
-if SAVE:
+if SAVE_FIG:
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, TAG + '_rho_vp_plane.png')
     fig.savefig(out, dpi=200)

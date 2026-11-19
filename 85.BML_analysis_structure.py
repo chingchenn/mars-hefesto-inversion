@@ -19,7 +19,7 @@ Created on Wed Aug 26 16:50:55 2026
 import os, glob, json
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 MCMC_BASE_DIR = MCMC_DIR
 CHAIN_PREFIX  = 'chain_a52B'
@@ -27,7 +27,7 @@ CHAIN_PREFIX  = 'chain_a52B'
 H_THRESH      = 1.0     # km
 N_PER_STATE   = 40      # 每個 state 畫幾條
 BURNIN_FRAC   = 0.3
-SAVE          = False
+SAVE_FIG      = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 COLOR = {'solid': '#2C3E50', 'layered': '#E67E22', 'molten': '#C0392B'}
 
@@ -141,8 +141,8 @@ axes[0].legend(fontsize=9, loc='lower right', framealpha=0.85)
 fig.suptitle(f'{CHAIN_PREFIX}: BML zoom, 依三態分色 (每態 top {N_PER_STATE} by misfit)',
              fontsize=11, y=0.98)
 plt.tight_layout()
-if SAVE:
-    fig.savefig(f'69b_{CHAIN_PREFIX}_bml_zoom_by_state.png', dpi=300,
+if SAVE_FIG:
+    fig.savefig(os.path.join(FIG_DIR, f'69b_{CHAIN_PREFIX}_bml_zoom_by_state.png'), dpi=300,
                 bbox_inches='tight', facecolor=fig.get_facecolor())
 plt.show()
 
@@ -173,8 +173,8 @@ axes2[0].legend(fontsize=9, loc='lower right', framealpha=0.85)
 
 fig2.suptitle(f'{CHAIN_PREFIX}: 全深度,依三態分色', fontsize=11, y=0.98)
 plt.tight_layout()
-if SAVE:
-    fig2.savefig(f'69b_{CHAIN_PREFIX}_fulldepth_by_state.png', dpi=300,
+if SAVE_FIG:
+    fig2.savefig(os.path.join(FIG_DIR, f'69b_{CHAIN_PREFIX}_fulldepth_by_state.png'), dpi=300,
                  bbox_inches='tight', facecolor=fig2.get_facecolor())
 plt.show()
 

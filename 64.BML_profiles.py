@@ -31,7 +31,7 @@ import os, glob, json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 MCMC_BASE_DIR  = MCMC_DIR
@@ -39,7 +39,7 @@ CHAIN_PREFIX   = 'chain_a52B'
 HEF_PREFIX     = 'chain_a21'
 SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
                   'Nature_Samuel/METADATA_BML/DATA_FIG1')
-OUT_DIR        = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR        = FIG_DIR
 
 DEPTH_MAX      = 1800        # Khan / Samuel 對照資料的深度上限(Z 網格用)
 SPLICE_DEPTH   = 100.0
@@ -56,7 +56,7 @@ FIG1_YLIM = None
 FIG1_PAD  = 80.0             # km, 自動視窗上下各留的邊界
 
 PLOT_HEFESTO = False
-SAVE         = False
+SAVE_FIG     = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 if CHAIN_PREFIX in ('chain_a36', 'chain_a36_'):
     raise SystemExit(
@@ -595,7 +595,7 @@ if PLOT_HEFESTO and hf is not None and hf['chain_dir'] is not None:
                   f"|  {fmt(hf['params'])}")
 fig.suptitle(title_str, fontsize=9.5, y=1.01)
 plt.tight_layout()
-if SAVE:
+if SAVE_FIG:
     out1 = os.path.join(OUT_DIR,
                         f'best_fit_{CHAIN_PREFIX}_top{TOP_N}_vp_vs_rho.png')
     plt.savefig(out1, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
@@ -677,7 +677,7 @@ for sp in ax.spines.values(): sp.set_linewidth(2.0)
 fig2.suptitle('Mars Mantle+BML Temperature: nGibbs vs Samuel 2023 vs Khan 2023',
               fontsize=11, y=1.01)
 plt.tight_layout()
-if SAVE:
+if SAVE_FIG:
     out2 = os.path.join(OUT_DIR,
                         f'best_fit_{CHAIN_PREFIX}_top{TOP_N}_temperature.png')
     plt.savefig(out2, dpi=300, bbox_inches='tight', facecolor=fig2.get_facecolor())

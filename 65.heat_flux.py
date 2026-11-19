@@ -31,16 +31,16 @@ import json
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ── 設定 ──────────────────────────────────────────────────────────────────────
 CHAIN_DIR = MCMC_DIR
-OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR   = FIG_DIR
 PREFIX    = 'chain_a52B'
 
 BURNIN_FRAC = 0.4
 MIN_STEPS   = 400
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 K_BML   = 4.0        # W/m/K   固態 BML 熱導率(與 70b 的 K_SOLID 一致)
 H_MIN   = 1.0        # km      三態分類門檻
@@ -242,7 +242,7 @@ ax.grid(alpha=0.3)
 for a in ['top', 'bottom', 'left', 'right']:
     ax.spines[a].set_linewidth(bwith)
 plt.tight_layout()
-if SAVE:
+if SAVE_FIG:
     plt.savefig(os.path.join(OUT_DIR, f'{PREFIX}_105_flux_vs_adiabat.png'), dpi=150)
 plt.show()
 
@@ -273,7 +273,7 @@ for mm, K_CORE in enumerate(K_CORE_list):
 fig.suptitle('left of the dashed line: core is subadiabatic, '
              'thermal convection shuts down', fontsize=fontsize + 1)
 plt.tight_layout()
-if SAVE:
+if SAVE_FIG:
     plt.savefig(os.path.join(OUT_DIR, f'{PREFIX}_105_flux_ratio.png'), dpi=150)
 plt.show()
 
@@ -301,6 +301,6 @@ ax.grid(alpha=0.3)
 for a in ['top', 'bottom', 'left', 'right']:
     ax.spines[a].set_linewidth(bwith)
 plt.tight_layout()
-if SAVE:
+if SAVE_FIG:
     plt.savefig(os.path.join(OUT_DIR, f'{PREFIX}_105_flux_vs_Tcore.png'), dpi=150)
 plt.show()

@@ -1,21 +1,25 @@
 """
 計算各震相的射線轉折深度
 """
+import os
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from obspy.taup import TauPyModel
 import importlib.util
+from mars_config import FIG_DIR, TAUP_WORK_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 spec = importlib.util.spec_from_file_location(
     "mcmc",
-    "/home/jcchen2/mars-hefesto-inversion/15.mcmc_withBML_MOI.py")
+    f'{HERE}/15.mcmc_withBML_MOI.py')
 mcmc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mcmc)
 
 mcmc.load_gravity_profile()
 # 用你的 best fit model
-TAUP_MODEL_PATH = '/net/beno3/data1/jcchen2/mars-hefesto-runs/taup_models/best_fit_BML_plot.npz'
+TAUP_MODEL_PATH = f'{TAUP_WORK_DIR}/best_fit_BML_plot.npz'
 taup = TauPyModel(model=TAUP_MODEL_PATH)
 
 SAMUEL_DATA = mcmc.SAMUEL_DATA
@@ -135,8 +139,8 @@ ax.legend()
 
 plt.tight_layout()
 
-plt.savefig(
-    '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc/phase_depth_sensitivity.png',
+if SAVE_FIG: plt.savefig(
+    f'{FIG_DIR}/phase_depth_sensitivity.png',
     dpi=200,
     bbox_inches='tight')
 
@@ -223,8 +227,8 @@ ax.legend()
 
 plt.tight_layout()
 
-plt.savefig(
-    '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc/ray_turning_depth2.png',
+if SAVE_FIG: plt.savefig(
+    f'{FIG_DIR}/ray_turning_depth2.png',
     dpi=200,
     bbox_inches='tight'
 )

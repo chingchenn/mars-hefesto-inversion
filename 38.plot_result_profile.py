@@ -7,7 +7,8 @@ import os, glob, json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 MCMC_BASE_DIR  = MCMC_DIR
@@ -383,6 +384,6 @@ if PLOT_HEFESTO and hf is not None:
     title_str += (f"\nHeFESTo best: {os.path.basename(hf['chain_dir'])}  step {hf['step']}  "
                   f"misfit={hf['misfit']:.4f}  |  {fmt(hf['params'])}")
 fig.suptitle(title_str, fontsize=9.5, y=1.01)
-out = f'/net/beno3/data1/jcchen2/mars-hefesto-runs/figures/best_fit_{CHAIN_PREFIX}_top{TOP_N}.png'
-plt.savefig(out, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
+out = f'{FIG_DIR}/best_fit_{CHAIN_PREFIX}_top{TOP_N}.png'
+if SAVE_FIG: plt.savefig(out, dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
 print(f"\nSaved: {out}")

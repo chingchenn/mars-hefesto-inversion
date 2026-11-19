@@ -11,13 +11,13 @@ import numpy as np
 from scipy.stats import spearmanr
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from mars_config import MCMC_DIR, RUN_BASE
+from mars_config import MCMC_DIR, RUN_BASE, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # 設定
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR   = MCMC_DIR
-OUT_DIR     = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR     = FIG_DIR
 PREFIX      = 'chain_a60_TA'   # 'chain_a36A' 或 'chain_a36B',不要寫 'chain_a36'
 PHASE_TABLE = f'{RUN_BASE}/mcmcfigures/bml_phase_table_prior_a31.npz'
 
@@ -35,7 +35,7 @@ plt.rcParams['font.family'] = 'DejaVu Sans'
 BURNIN_FRAC = 0.4
 DROP_LAST   = 1
 MIN_STEPS   = 400
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 fontsize = 14             # 全域字級,tick_params 一律用 labelsize=14
 
@@ -288,7 +288,7 @@ if TOGGLE['marginals']:
         ax.set_xlabel(label, fontsize=fontsize); ax.set_ylabel('count', fontsize=fontsize)
         ax.tick_params(labelsize=14); ax.legend(fontsize=9)
     plt.tight_layout()
-    if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + '04_marginals.png'), dpi=150)
+    if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + '04_marginals.png'), dpi=150)
     plt.show()
 
 
@@ -344,7 +344,7 @@ def plot_corner(color_key, cmap, cbar_label, suffix, discrete=False):
         cbar = fig.colorbar(sm, cax=cax)
         cbar.set_label(cbar_label, fontsize=fontsize)
         cbar.ax.tick_params(labelsize=14)
-    if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + suffix + '.png'), dpi=150)
+    if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + suffix + '.png'), dpi=150)
     plt.show()
 
 
@@ -491,7 +491,7 @@ if TOGGLE['core_diag']:
                      f'{"yes (Run B)" if np.nanmax(post["ric_sigma"]) > 0 else "no (Run A)"})',
                      fontsize=fontsize + 1)
         fig.tight_layout()
-        if SAVE: fig.savefig(os.path.join(OUT_DIR, TAG + 'K_core_diag.png'), dpi=150)
+        if SAVE_FIG: fig.savefig(os.path.join(OUT_DIR, TAG + 'K_core_diag.png'), dpi=150)
         plt.show()
 
 
@@ -585,7 +585,7 @@ if TOGGLE['struct_diag']:
         fig.suptitle(f'{PREFIX}  self-consistent structure diagnostics',
                      fontsize=fontsize + 1)
         fig.tight_layout()
-        if SAVE: fig.savefig(os.path.join(OUT_DIR, TAG + 'L_struct_diag.png'), dpi=150)
+        if SAVE_FIG: fig.savefig(os.path.join(OUT_DIR, TAG + 'L_struct_diag.png'), dpi=150)
         plt.show()
 
 
@@ -675,7 +675,7 @@ if TOGGLE['prior_post_shrinkage']:
     fig.suptitle('grey line = prior (1.0), bars above 1 = data moved probability here',
                  fontsize=fontsize + 1)
     fig.tight_layout()
-    if SAVE: fig.savefig(os.path.join(OUT_DIR, TAG + 'J_prior_post.png'), dpi=150)
+    if SAVE_FIG: fig.savefig(os.path.join(OUT_DIR, TAG + 'J_prior_post.png'), dpi=150)
     plt.show()
 
 
@@ -815,5 +815,5 @@ if TOGGLE['convergence_diag']:
     fig.suptitle('running mean per chain: should converge onto the dashed line',
                  fontsize=fontsize + 2)
     fig.tight_layout()
-    if SAVE: fig.savefig(os.path.join(OUT_DIR, TAG + 'I_running_mean.png'), dpi=150)
+    if SAVE_FIG: fig.savefig(os.path.join(OUT_DIR, TAG + 'I_running_mean.png'), dpi=150)
     plt.show()

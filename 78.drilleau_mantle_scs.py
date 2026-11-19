@@ -51,6 +51,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import mars_config as cfg
+from mars_config import FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # settings
@@ -66,7 +67,7 @@ R_GRID   = np.arange(1680.0, 1901.0, 10.0)   # km, R_CMB = R_ScS (no BML)
 P_TP     = 0.01                              # GPa, isentrope foot used for Tp
 Z_VS_AVG = (600.0, 1500.0)                   # km depth, mantle Vs average window
 FS       = 14
-SAVE     = True
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 OUT_DIR  = os.path.dirname(os.path.abspath(__file__))   # beno3 mars_config has no FIG_DIR
 
 CASE_SEL = os.environ.get('CASE_SEL')       # run one case (index into CASES)
@@ -253,7 +254,7 @@ print('R_bias0 = R where the mean ScS-S residual crosses zero (linear interpolat
 if CASE_SEL is not None:
     sys.exit(0)                          # single case: no merged file, no figure
 
-if SAVE:
+if SAVE_FIG:
     os.makedirs(OUT_DIR, exist_ok=True)
     np.savez(os.path.join(OUT_DIR, '78_drilleau_mantle_scs.npz'),
              R_GRID=R_GRID, labels=np.array(list(res)),
@@ -288,6 +289,6 @@ for a in ax:
     a.tick_params(labelsize=14)
 ax[0].legend(fontsize=10, loc='lower right')
 plt.tight_layout()
-if SAVE:
+if SAVE_FIG:
     fig.savefig(os.path.join(OUT_DIR, '78_drilleau_mantle_scs.png'), dpi=200)
     print(f'saved {OUT_DIR}/78_drilleau_mantle_scs.png')

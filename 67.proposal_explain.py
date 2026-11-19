@@ -25,6 +25,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import mars_config as cfg
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 MCMC_DIR = cfg.MCMC_DIR
 OUT_DIR  = cfg.FIG_DIR
@@ -163,5 +164,5 @@ ax.legend(loc='upper right', fontsize=10)
 plt.show()
 fig.tight_layout()
 out = os.path.join(OUT_DIR, f'67_proposal_explain_{A["name"]}_{B["name"]}.png')
-fig.savefig(out, dpi=150)
+if SAVE_FIG: fig.savefig(out, dpi=150)
 print(f'\nsaved {out}')

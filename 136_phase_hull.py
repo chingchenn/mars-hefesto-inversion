@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 # -*- coding: utf-8 -*-
 """
 Created on Thu Oct 29 15:35:58 2026
@@ -28,6 +29,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from scipy.optimize import fsolve, brentq
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
@@ -153,7 +156,7 @@ for ax, T in zip(axes, T_SUB):
     ax.tick_params(labelsize=14)
     ax.legend(fontsize=11, loc='lower right')
 fig.tight_layout()
-fig.savefig('136_subsolidus_PX.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '136_subsolidus_PX.png'), dpi=150)
 
 # ── figure 2: isobaric T-X sections (shifted) vs Pierru (2026) ──────────
 fig, axes = plt.subplots(1, len(P_TX), figsize=(5.2*len(P_TX), 6))
@@ -173,5 +176,5 @@ for ax, P in zip(axes, P_TX):
     ax.set_title(f'P = {P} GPa (shift {SHIFT:.0f} K)', fontsize=fontsize)
     ax.tick_params(labelsize=14)
 fig.tight_layout()
-fig.savefig('136_isobaric_TX.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '136_isobaric_TX.png'), dpi=150)
 plt.show()

@@ -24,7 +24,7 @@ Created on Wed Aug 26 15:35:02 2026
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR = MCMC_DIR
@@ -48,7 +48,7 @@ STATE_COLOR = {'solid': '#4E6E8E', 'layered': '#7B9E87', 'molten': '#CD5C5C'}
 
 fontsize = 14
 TICKSIZE = 14
-SAVE     = False
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 def load_chain_dir(dd):
@@ -234,7 +234,7 @@ for k, (pf, segs) in enumerate(SEGS.items()):
 fig.suptitle('short segments dominate => layered is a corridor, not a basin',
              fontsize=fontsize)
 fig.tight_layout()
-if SAVE: fig.savefig('100_layered_segment_lengths.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '100_layered_segment_lengths.png'), dpi=150)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -291,7 +291,7 @@ for ax, p in zip(axes.ravel(), PARAMS):
 fig.suptitle('parameter distributions within each mode, all runs overlaid '
              '(blue = solid mode, red = molten mode)', fontsize=fontsize + 1)
 fig.tight_layout()
-if SAVE: fig.savefig('100_within_mode_params.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '100_within_mode_params.png'), dpi=150)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -351,5 +351,5 @@ if ALLT:
                  '(narrow red peak = the barrier coordinate)',
                  fontsize=fontsize + 1)
     fig.tight_layout()
-    if SAVE: fig.savefig('100_transition_locations.png', dpi=150)
+    if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '100_transition_locations.png'), dpi=150)
     plt.show()

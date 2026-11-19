@@ -31,7 +31,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR = MCMC_DIR
@@ -53,7 +53,7 @@ SKS_PP_IRV  = (339.3, 4.7)   # Irving Table 1,S1000a,方法 A/B/C 平均與 SD
 
 fontsize = 14
 TICKSIZE = 14
-SAVE     = False
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 STATES      = ['solid', 'layered', 'molten']
 STATE_COLOR = {'solid': '#4E6E8E', 'layered': '#7B9E87', 'molten': '#CD5C5C'}
 
@@ -258,5 +258,5 @@ ax.tick_params(labelsize=TICKSIZE)
 ax.legend(fontsize=11)
 fig.suptitle('SKS existence window and differential travel time', fontsize=fontsize + 2)
 fig.tight_layout()
-if SAVE: fig.savefig('101_sks_window.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '101_sks_window.png'), dpi=150)
 plt.show()

@@ -21,7 +21,7 @@ Created on Wed Aug 26 16:19:42 2026
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR = MCMC_DIR
@@ -38,7 +38,7 @@ KEYS = ['misfit', 'misfit_tt', 'misfit_solidus', 'mass_sigma', 'moi_sigma',
 
 fontsize = 14
 TICKSIZE = 14
-SAVE     = False
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 C_FROZEN, C_ALIVE = '#CD5C5C', '#4E6E8E'
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -159,7 +159,7 @@ for i, (pf, chains) in enumerate(RUNS.items()):
 fig.suptitle('red = frozen chains; a horizontal spread in one column identifies the cause',
              fontsize=fontsize + 1)
 fig.tight_layout()
-if SAVE: fig.savefig('102_islanding_cause.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '102_islanding_cause.png'), dpi=150)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -28,7 +28,7 @@ Created on Wed Aug 26 17:19:12 2026
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR = MCMC_DIR
@@ -58,7 +58,7 @@ K_LEVELS = [1, 2, 3, 5, 10]
 
 fontsize = 14
 TICKSIZE = 14
-SAVE     = False
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 STATES      = ['solid', 'layered', 'molten']
 STATE_COLOR = {'solid': '#4E6E8E', 'layered': '#7B9E87', 'molten': '#CD5C5C'}
 
@@ -227,7 +227,7 @@ fig.suptitle('posterior predictive M and MoI   '
              'grey band = sigma used here, dashed = observed, '
              'blue = Khan 2023, red = Samuel 2023', fontsize=fontsize)
 fig.tight_layout()
-if SAVE: fig.savefig('104_mass_moi_predictive.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '104_mass_moi_predictive.png'), dpi=150)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -254,5 +254,5 @@ for k, (pf, d) in enumerate(RUNS.items()):
         ax.legend(fontsize=10, markerscale=3)
 fig.suptitle('mass vs MoI, coloured by BML state', fontsize=fontsize + 1)
 fig.tight_layout()
-if SAVE: fig.savefig('104_mass_vs_moi.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '104_mass_vs_moi.png'), dpi=150)
 plt.show()

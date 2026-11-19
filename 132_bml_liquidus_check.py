@@ -5,7 +5,8 @@ import types
 import numpy as np
 from scipy.optimize import brentq, fsolve
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -219,7 +220,7 @@ ax[1].legend(loc='lower right', fontsize=12)
 for a in ax:
     a.tick_params(labelsize=14)
 fig.tight_layout()
-fig.savefig(f'132_{RUN_TAG}_liquidus_adiabat_check.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, f'132_{RUN_TAG}_liquidus_adiabat_check.png'), dpi=200)
 print(f"\nsaved 132_{RUN_TAG}_liquidus_adiabat_check.png")
 
 # ── diagnostics: (1) undercooling vs liquid thickness, (2) solid check by phase branch ──
@@ -261,5 +262,5 @@ ax[1].legend(loc='lower right', fontsize=10)
 for a in ax:
     a.tick_params(labelsize=14)
 fig.tight_layout()
-fig.savefig(f'132_{RUN_TAG}_liquidus_diagnostics.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, f'132_{RUN_TAG}_liquidus_diagnostics.png'), dpi=200)
 print(f"saved 132_{RUN_TAG}_liquidus_diagnostics.png")

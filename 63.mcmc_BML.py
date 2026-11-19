@@ -23,11 +23,11 @@ Created on Sun Jul 26 22:02:56 2026
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ── 設定 ─────────────────────────────────────────────────────────────────────
 CHAIN_DIR = MCMC_DIR
-OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR   = FIG_DIR
 PREFIX    = 'chain_a52B'
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
@@ -35,7 +35,7 @@ plt.rcParams['font.family'] = 'DejaVu Sans'
 BURNIN_FRAC = 0.3
 DROP_LAST   = 1
 MIN_STEPS   = 100        
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 D_NO_BML = 2.0           # km, D 小於此值視為「沒有 BML」(待辦 ⑥ 的污染比例)
 H_MIN    = 1.0           # km, 三態分類門檻
@@ -199,7 +199,7 @@ ax.set_xlabel('h_liquid (km)', fontsize=fontsize)
 ax.set_ylabel('BML thickness (km)', fontsize=fontsize)
 ax.tick_params(labelsize=14)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + '07_hliq_vs_D.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + '07_hliq_vs_D.png'), dpi=150)
 plt.show()
 
 
@@ -229,7 +229,7 @@ def plot_contrast(color_key, cbar_label, cmap='magma', suffix='', discrete=False
     ax.set_ylabel('lower contrast (g/cc)', fontsize=fontsize)
     ax.tick_params(labelsize=14)
     plt.tight_layout()
-    if SAVE and suffix:
+    if SAVE_FIG and suffix:
         plt.savefig(os.path.join(OUT_DIR, TAG + suffix + '.png'), dpi=150)
     plt.show()
 
@@ -274,7 +274,7 @@ axes[1].pie([sizes[i] for i in keep],
             autopct='%1.1f%%', startangle=90, textprops={'fontsize': 12})
 axes[1].set_title('posterior BML state', fontsize=fontsize)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + '08_rayleigh_state.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + '08_rayleigh_state.png'), dpi=150)
 plt.show()
 
 if ok_ra.sum():

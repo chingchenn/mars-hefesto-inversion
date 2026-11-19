@@ -33,7 +33,7 @@ Created on Wed Aug 26 13:58:49 2026
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR = MCMC_DIR
@@ -53,7 +53,7 @@ DROP_ABOVE_EOS = True    # 主結果先切掉 EoS 定義域外的樣本
 
 fontsize  = 14
 TICKSIZE  = 14
-SAVE      = False
+SAVE_FIG  = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 STATES      = ['solid', 'layered', 'molten']
 STATE_COLOR = {'solid': '#4E6E8E', 'layered': '#7B9E87', 'molten': '#CD5C5C'}
@@ -281,7 +281,7 @@ for k, (pf, d) in enumerate(RUNS.items()):
 fig.suptitle('inner-core size vs core temperature and light-element content',
              fontsize=fontsize + 2)
 fig.tight_layout()
-if SAVE: fig.savefig('98_ric_vs_Tcore_wS.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '98_ric_vs_Tcore_wS.png'), dpi=150)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -316,7 +316,7 @@ for k, (pf, d) in enumerate(RUNS.items()):
 fig.suptitle('dashed = Irving 2023 SKS penetration limit   '
              'dotted grey = fraction of samples retained', fontsize=fontsize)
 fig.tight_layout()
-if SAVE: fig.savefig('98_state_vs_ric_threshold.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '98_state_vs_ric_threshold.png'), dpi=150)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -343,5 +343,5 @@ for k, (pf, d) in enumerate(RUNS.items()):
 fig.suptitle('gap$_{min}$ <= 0: adiabat reaches the liquidus, inner core nucleates',
              fontsize=fontsize)
 fig.tight_layout()
-if SAVE: fig.savefig('98_gapmin_by_state.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '98_gapmin_by_state.png'), dpi=150)
 plt.show()

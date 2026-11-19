@@ -25,6 +25,8 @@ import numpy as np
 from scipy.optimize import brentq, fsolve
 import matplotlib.pyplot as plt
 import os
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -157,5 +159,5 @@ for a, name in zip(ax, [r'$\Delta T_{sol}$ (K)', r'$\Delta T_{liq}$ (K)']):
     a.tick_params(labelsize=14)
 ax[0].legend(fontsize=9, loc='best')
 fig.tight_layout()
-fig.savefig('134_phase_param_sensitivity.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '134_phase_param_sensitivity.png'), dpi=200)
 print("\nsaved 134_phase_param_sensitivity.png")

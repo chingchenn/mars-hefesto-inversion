@@ -20,11 +20,11 @@ a36 更新:
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ── 設定 ─────────────────────────────────────────────────────────────────────
 CHAIN_DIR   = MCMC_DIR
-OUT_DIR     = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR     = FIG_DIR
 PREFIX      = 'chain_a52B'      # 'chain_a36A' 或 'chain_a36B',不要寫 'chain_a36'
 
 if PREFIX.startswith('chain_a36') and PREFIX in ('chain_a36', 'chain_a36_'):
@@ -40,7 +40,7 @@ DROP_LAST   = 1
 MIN_STEPS   = 300         # a36 有一批 30-90 步的短鏈,門檻拉高避免污染後驗
 RA_C        = 1.0e5
 CHENG_TC    = (2200.0, 2400.0)
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 SEC_YR, G_MARS = 3.156e7, 3.72
 
 RHO_S_CONST = 4.097      # g/cc, nGibbs at posterior XS, [3.98, 4.24]
@@ -432,7 +432,7 @@ for a_ in axes:
     for sp in ['top', 'bottom', 'left', 'right']:
         a_.spines[sp].set_linewidth(bwith)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'B_bayes.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'B_bayes.png'), dpi=150)
 plt.show()
 
 

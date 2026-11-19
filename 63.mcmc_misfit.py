@@ -22,11 +22,11 @@ misfit 與 BML 狀態的關係:
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ── 設定 ─────────────────────────────────────────────────────────────────────
 CHAIN_DIR = MCMC_DIR
-OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR   = FIG_DIR
 PREFIX    = 'chain_a52A'
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
@@ -35,7 +35,7 @@ BURNIN_FRAC = 0.3
 DROP_LAST   = 1
 MIN_STEPS   = 100        # 設 400 會剔掉 chain_13(396 步)
 RA_C        = 1.0e5      # 跟 59 的 _RA_C 一致
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # a34 先驗。這支腳本並未實際用到(圖A/L/F 都不需要先驗範圍),
 # 保留純粹作為該輪 run 的紀錄,避免各腳本之間的值不一致。
@@ -203,7 +203,7 @@ axes[2].set_ylabel('density', fontsize=14)
 for a in axes:
     a.tick_params(labelsize=14); a.legend(fontsize=10)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'A_misfit_state.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'A_misfit_state.png'), dpi=150)
 plt.show()
 
 print(f"\n{'state':8s} {'n':>6s} {'min':>8s} {'q25':>8s} {'median':>8s} "
@@ -253,7 +253,7 @@ for ax, key, pal, ttl in [
     for sp in ['top', 'bottom', 'left', 'right']:
         ax.spines[sp].set_linewidth(bwith)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'L_misfit_vs_state.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'L_misfit_vs_state.png'), dpi=150)
 plt.show()
 
 print(f"\n{'thermal_state':<14s}{'n':>7s}{'misfit med':>12s}{'tt med':>10s}")
@@ -299,5 +299,5 @@ else:
                   fontsize=fontsize)
     ax.tick_params(labelsize=14)
     plt.tight_layout()
-    if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'F_misfit_decomp.png'), dpi=150)
+    if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'F_misfit_decomp.png'), dpi=150)
     plt.show()

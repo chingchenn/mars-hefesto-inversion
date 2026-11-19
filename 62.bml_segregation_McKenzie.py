@@ -21,11 +21,12 @@ bml_segregation_check.py  —  跑在 cluster (beno3) 上
 """
 import os, sys, json, glob, argparse, importlib.util
 import numpy as np
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 SEC_YR = 3.156e7
 AGE_MARS = 4.5e9
 
-MAIN = '/home/jcchen2/mars-hefesto-inversion/59.mcmc_nGibbs_Mars_a25.py'
+MAIN = f'{HERE}/59.mcmc_nGibbs_Mars_a25.py'
 
 # ── percolation parameters (掃描用) ───────────────────────────────────────────
 A_GRAIN = 1e-3        # m,   grain radius

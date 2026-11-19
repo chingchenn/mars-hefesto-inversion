@@ -21,7 +21,8 @@ import glob
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import RUN_BASE
+from mars_config import RUN_BASE, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # parameters 
 
@@ -212,7 +213,7 @@ def plot_trace(chains, output_dir, prefix=''):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_01_trace_plots.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
 
 
@@ -242,7 +243,7 @@ def plot_autocorr(trimmed_chains, output_dir, prefix=''):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_02_autocorrelation.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
 
 # figure 3：marginal posterior distributions
@@ -282,7 +283,7 @@ def plot_marginal_posteriors(samples, misfits, output_dir, prefix=''):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_03_marginal_posteriors.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
 
 
@@ -334,7 +335,7 @@ def plot_corner(samples, output_dir, max_samples=5000, prefix=''):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_04_corner_plot.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
 
 # figure 5：Misfit vs parameters（sensitivity）
@@ -356,7 +357,7 @@ def plot_misfit_vs_params(samples, misfits, output_dir, prefix=''):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'{prefix}_05_misfit_vs_params.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
 
 # results
@@ -443,7 +444,7 @@ def main():
                         help='輸出資料夾（預設與 mcmc_dir 相同）')
     args = parser.parse_args()
 
-    output_dir = args.output_dir or args.mcmc_dir
+    output_dir = args.output_dir or FIG_DIR
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 55)

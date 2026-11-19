@@ -22,6 +22,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.colors import LogNorm
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # parameters
 
@@ -164,7 +166,7 @@ def plot_trace(chains, output_dir):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'01_{model}_trace_plots.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
 
 
@@ -217,7 +219,7 @@ def plot_autocorr(trimmed_chains, output_dir):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'02_{model}_autocorrelation.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
    
 
@@ -293,7 +295,7 @@ def plot_marginal_posteriors(samples, output_dir):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'03_{model}_marginal_posteriors.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
     
     
@@ -345,7 +347,7 @@ def plot_corner(samples, output_dir, max_samples=5000):
 
     plt.tight_layout()
     out = os.path.join(output_dir, f'04_{model}_corner_plot.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
+    if SAVE_FIG: plt.savefig(out, dpi=150, bbox_inches='tight')
     plt.close()
   
 
@@ -394,7 +396,7 @@ def main():
                         help='輸出資料夾（預設與 mcmc_dir 相同）')
     args = parser.parse_args()
 
-    output_dir = args.output_dir or args.mcmc_dir
+    output_dir = args.output_dir or FIG_DIR
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 55)

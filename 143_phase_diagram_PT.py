@@ -11,6 +11,8 @@ import types
 import numpy as np
 from scipy.optimize import brentq, fsolve
 import matplotlib.pyplot as plt
+from mars_config import FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ── config ────────────────────────────────────────────────────────────────────
 FORWARD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '26fall_main_mcmc.py')
@@ -77,5 +79,5 @@ ax[1].tick_params(labelsize=14)
 ax[1].legend(loc='lower right', fontsize=10)
 
 fig.tight_layout()
-fig.savefig('143_a60_phase_diagram_TP.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '143_a60_phase_diagram_TP.png'), dpi=200)
 print("saved 143_a60_phase_diagram_TP.png")

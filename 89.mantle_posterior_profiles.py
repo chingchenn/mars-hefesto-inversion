@@ -53,6 +53,7 @@ warnings.filterwarnings('ignore', 'All-NaN slice')      # rows outside a sample'
 import matplotlib.pyplot as plt
 from matplotlib.colors import PowerNorm
 import mars_config as cfg
+from mars_config import FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # settings
@@ -69,7 +70,7 @@ DROP_LAST   = 1
 MIN_STEPS   = 100                 # a64 is still running; raise to 400 when finished
 N_DRAW      = 3000                # posterior samples drawn (profiles loaded, cached by step)
 SEED        = 0
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 MARS_RADIUS  = 3389.5             # km
 SPLICE_DEPTH = 100.0              # km, bottom of the fixed layer (Samuel 2023)
@@ -430,7 +431,7 @@ cax = fig.add_axes([0.25, 0.075, 0.40, 0.018])
 cb = fig.colorbar(plt.cm.ScalarMappable(cmap=CMAP, norm=norm), cax=cax, orientation='horizontal')
 cb.set_label('posterior density (normalised per depth)', fontsize=FS)
 cb.ax.tick_params(labelsize=14)
-if SAVE:
+if SAVE_FIG:
     tag = 'full_depth' if FULL_DEPTH else 'mantle'
-    fig.savefig(f'89_{PREFIX}_{tag}.png', dpi=200)
+    fig.savefig(os.path.join(FIG_DIR, f'89_{PREFIX}_{tag}.png'), dpi=200)
 plt.show()

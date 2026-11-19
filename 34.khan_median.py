@@ -1,9 +1,9 @@
 import numpy as np
 import glob
 import os
+from mars_config import KHAN_MODEL_DIR
 
-KHAN_MODEL_DIR = "/net/beno3/data1/jcchen2/Mars_Khan_2023/LSL_Models"   
-OUTPUT_PATH    = "/net/beno3/data1/jcchen2/Mars_Khan_2023/LSL_Models/khan_median.npz"
+OUTPUT_PATH    = f'{KHAN_MODEL_DIR}/khan_median.npz'
 MARS_RADIUS    = 3389.5
 
 files = sorted(glob.glob(os.path.join(KHAN_MODEL_DIR, 'Model_*.txt')))

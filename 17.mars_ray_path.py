@@ -1,7 +1,11 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 from obspy.taup import TauPyModel
 import importlib.util
+from mars_config import FIG_DIR, TAUP_WORK_DIR
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ============================================================
 # load MCMC module
@@ -9,7 +13,7 @@ import importlib.util
 
 spec = importlib.util.spec_from_file_location(
     "mcmc",
-    "/home/jcchen2/mars-hefesto-inversion/15.mcmc_withBML_MOI.py"
+    f'{HERE}/15.mcmc_withBML_MOI.py'
 )
 
 mcmc = importlib.util.module_from_spec(spec)
@@ -24,9 +28,7 @@ SAMUEL_DATA = mcmc.SAMUEL_DATA
 # ============================================================
 
 TAUP_MODEL_PATH = (
-    '/net/beno3/data1/jcchen2/'
-    'mars-hefesto-runs/taup_models/'
-    'best_fit_BML_plot.npz'
+    f'{TAUP_WORK_DIR}/best_fit_BML_plot.npz'
 )
 
 taup = TauPyModel(model=TAUP_MODEL_PATH)
@@ -207,8 +209,8 @@ ax.set_title(
 
 plt.tight_layout()
 
-plt.savefig(
-    '/net/beno3/data1/jcchen2/mars-hefesto-runs/mcmc/mars_raypaths.png',
+if SAVE_FIG: plt.savefig(
+    f'{FIG_DIR}/mars_raypaths.png',
     dpi=300,
     bbox_inches='tight'
 )

@@ -12,7 +12,7 @@ import json, glob, os
 import numpy as np
 from scipy.stats import spearmanr
 import matplotlib.pyplot as plt
-from mars_config import MCMC_DIR
+from mars_config import MCMC_DIR, FIG_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # config
@@ -26,7 +26,7 @@ BURNIN_FRAC = 0.4
 DROP_LAST   = 1
 MIN_STEPS   = 400
 N_SCATTER   = 3000        # points per composition in fig 4
-SAVE        = True
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 FS          = 14
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
@@ -137,7 +137,7 @@ for ax, (k, lab) in zip(axes.ravel(), FIT_KEYS):
 axes.ravel()[-1].legend(loc='lower right', fontsize=FS - 2)
 fig.suptitle('Fit quality by mantle composition (dashed = median)', fontsize=FS + 2)
 fig.tight_layout()
-if SAVE: fig.savefig('133_fit_quality.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '133_fit_quality.png'), dpi=200)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -167,7 +167,7 @@ axes[-1].legend(loc='lower right', fontsize=FS - 2)
 fig.suptitle('Mantle parameters (Mg# panel: dotted = published, band = Drilleau 2026 BML)',
              fontsize=FS + 1)
 fig.tight_layout()
-if SAVE: fig.savefig('133_mantle_params.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '133_mantle_params.png'), dpi=200)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -199,7 +199,7 @@ axes.ravel()[-1].legend(loc='lower right', fontsize=FS - 2)
 fig.suptitle('BML / core parameters: NOT mixed yet (ticks = per-chain means, grey = prior)',
              fontsize=FS + 1)
 fig.tight_layout()
-if SAVE: fig.savefig('133_deep_params.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '133_deep_params.png'), dpi=200)
 plt.show()
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -226,7 +226,7 @@ for ax in axes:
     ax.tick_params(labelsize=14)
 axes[1].legend(loc='lower right', fontsize=FS - 2, markerscale=4)
 fig.tight_layout()
-if SAVE: fig.savefig('133_mg_tradeoff.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '133_mg_tradeoff.png'), dpi=200)
 plt.show()
 
 # EH45: which chains populate the low-Mg# tail?  (index j = sorted chain order after EXCLUDE)

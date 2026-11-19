@@ -11,7 +11,8 @@ import os
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import RUN_BASE
+from mars_config import RUN_BASE, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -74,6 +75,6 @@ axes[0].set_ylabel(r'$\rho_{liq}$ (g/cm$^3$)', fontsize=14)
 axes[-1].legend(fontsize=9, loc='lower right', ncol=2,
                 title='solid = A (Liu Gamma)   dashed = B (Liu Fe + Sakai FeS)')
 fig.tight_layout()
-fig.savefig('79_eos_AB_density.png', dpi=150)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '79_eos_AB_density.png'), dpi=150)
 print('\nsaved 79_eos_AB_density.png')
 plt.show()

@@ -14,7 +14,8 @@ import numpy as np
 from scipy.optimize import brentq
 import openpyxl
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR
+SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ── config ────────────────────────────────────────────────────────────────────
 HERE             = os.path.dirname(os.path.abspath(__file__))
@@ -203,5 +204,5 @@ ax.set_ylabel('P (GPa)', fontsize=14)
 ax.tick_params(labelsize=14)
 ax.legend(loc='lower left', fontsize=8.5)
 fig.tight_layout()
-fig.savefig('139b_pierru_fig6_with_a60.png', dpi=200)
+if SAVE_FIG: fig.savefig(os.path.join(FIG_DIR, '139b_pierru_fig6_with_a60.png'), dpi=200)
 print("saved 139b_pierru_fig6_with_a60.png")

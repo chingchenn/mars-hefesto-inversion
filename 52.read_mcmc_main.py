@@ -16,11 +16,11 @@ from scipy.optimize import brentq
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from scipy.interpolate import RegularGridInterpolator
-from mars_config import MCMC_DIR, RUN_BASE
+from mars_config import MCMC_DIR, RUN_BASE, FIG_DIR
 
 # ── 設定 ─────────────────────────────────────────────────────────────────────
 CHAIN_DIR   = MCMC_DIR
-OUT_DIR     = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
+OUT_DIR     = FIG_DIR
 PREFIX      = 'chain_a31'
 PHASE_TABLE = f'{RUN_BASE}/mcmcfigures/bml_phase_table_prior_a31.npz'
 
@@ -31,7 +31,7 @@ DROP_LAST   = 1
 MIN_STEPS = 400          # 從 200 提高,自動剔除 chain 14
 RA_C        = 1.0e5          # 跟 59 的 _RA_C 一致
 CHENG_TC    = (2200.0, 2400.0)
-SAVE        = False
+SAVE_FIG    = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 SEC_YR, G_MARS = 3.156e7, 3.72
 
 RHO_S_CONST = 4.097      # g/cc, nGibbs at posterior XS, [3.98, 4.24]
@@ -270,7 +270,7 @@ ax.set_ylabel(r'liquid Mg#$_L$')
 ax.set_title('(b) density inversion threshold @ 18 GPa, 2400 K', fontsize=11.5)
 ax.tick_params(labelsize=14)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'G_density.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'G_density.png'), dpi=150)
 plt.show()
     
 
@@ -291,7 +291,7 @@ ax.set_title('solid = D 400 km, dashed = D 50 km   '
 ax.set_ylim(1e-4, 1e16)
 ax.tick_params(labelsize=14); ax.grid(alpha=.3, which='both'); ax.legend(fontsize=10)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'D_drainage.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'D_drainage.png'), dpi=150)
 plt.show()
 
 def phi_crit(D, drho, t=4.5e9):
@@ -353,7 +353,7 @@ ax.tick_params(labelsize=14); ax.grid(alpha=.3, which='both'); ax.legend(fontsiz
 for sp in ['top', 'bottom', 'left', 'right']:
     ax.spines[sp].set_linewidth(bwith)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'K2_darcy_vs_stokes.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'K2_darcy_vs_stokes.png'), dpi=150)
 plt.show()
  
 i02 = np.argmin(np.abs(pg - 0.2)); i03 = np.argmin(np.abs(pg - 0.3))
@@ -387,7 +387,7 @@ axes[1].axvline(0, color='k', lw=2)
 axes[1].set_xlabel(r'$\Delta\rho$ (kg/m$^3$)  (>0 = melt sinks)')
 for a in axes: a.tick_params(labelsize=14)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'K_segregation.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'K_segregation.png'), dpi=150)
 plt.show()
 
 
@@ -414,7 +414,7 @@ for a_ in axes:
     for sp in ['top', 'bottom', 'left', 'right']:
         a_.spines[sp].set_linewidth(bwith)
 plt.tight_layout()
-if SAVE: plt.savefig(os.path.join(OUT_DIR, TAG + 'M_tt_miss.png'), dpi=150)
+if SAVE_FIG: plt.savefig(os.path.join(OUT_DIR, TAG + 'M_tt_miss.png'), dpi=150)
 plt.show()
  
 print(f'\ntt_n_miss: median={np.nanmedian(nm):.0f}  '

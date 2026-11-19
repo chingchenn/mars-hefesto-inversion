@@ -14,10 +14,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from mars_config import RUNS_DIR
 
 # CONFIG
 
-JSON_FILE = "/Users/chingchen/Desktop/HeFESTo/runs/all_misfits_samuel.json"
+JSON_FILE = f"{RUNS_DIR}/all_misfits_samuel.json"
 
 PARAM_KEYS = [
     'T_lit', 'P_lit', 'dTdP',

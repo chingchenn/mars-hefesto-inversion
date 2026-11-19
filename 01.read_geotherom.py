@@ -8,10 +8,12 @@ Created on Fri Mar 20 14:14:21 2026
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
+import os
+HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
 labelsize=12
 bwith=2
-path='/Users/chingchen/Desktop/HeFESTo/python/adin_files/'
+path=f'{HERE}/adin_files/'
 file = glob.glob(path + "ad*")
 
 

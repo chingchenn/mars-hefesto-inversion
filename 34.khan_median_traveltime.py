@@ -2,8 +2,9 @@
 # Khan vs Samuel travel times for each event and phase, and the mean |Samuel - Khan| per phase.
 import numpy as np
 import pandas as pd
+from mars_config import DATA_BASE
 
-CSV_FILE = '/Users/chingchen/Desktop/Lunar/data/combined_travel_times.csv'
+CSV_FILE = f'{DATA_BASE}/data/combined_travel_times.csv'
 
 df = pd.read_csv(CSV_FILE)
 

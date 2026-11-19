@@ -11,9 +11,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.lines as mlines
+from mars_config import RUN_BASE
 
 # ── CONFIG ─────────────────────────────────────────
-file_path = '/Users/chingchen/Desktop/HeFESTo/'
+file_path = RUN_BASE
 bulk_model = '02_YM_bulk_mantle_BML_T'
 bml_model  = '21_EM1_BML_Mg75'
 SPLICE_P   = 17.0   

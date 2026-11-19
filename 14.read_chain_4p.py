@@ -21,6 +21,7 @@ import glob
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+from mars_config import RUN_BASE
 
 # parameters 
 
@@ -432,7 +433,7 @@ def print_summary(samples, misfits):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mcmc_dir', type=str,
-                        default='/Users/chingchen/Desktop/HeFESTo/mcmc',
+                        default=f'{RUN_BASE}/mcmc',
                         help='MCMC 結果資料夾')
     parser.add_argument('--burnin', type=float, default=0.2,
                         help='Burn-in 比例（預設 0.2）')

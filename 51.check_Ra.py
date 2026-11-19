@@ -6,10 +6,11 @@
 import json, glob, sys
 import numpy as np
 import matplotlib.pyplot as plt
+from mars_config import RUN_BASE
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
-CHAIN_GLOB = '/Users/chingchen/Desktop/HeFESTo/chain_json/*/chain.json'
+CHAIN_GLOB = f'{RUN_BASE}/chain_json/*/chain.json'
 
 TRUE_CMB   = 1743.3   # km
 R          = 8.314

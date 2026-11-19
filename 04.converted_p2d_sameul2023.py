@@ -8,17 +8,18 @@ Created on Sun Mar 22 20:50:00 2026
 
 import numpy as np
 import matplotlib.pyplot as plt
+from mars_config import DATA_BASE, RUN_BASE
 
 
 
 MARS_RADIUS = 3389.5  
 g_mars = 3.72         
 
-SAMUEL_T_FILE_BML = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_I/Tprofile.dat'
-SAMUEL_RHO_FILE_BML = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat'
+SAMUEL_T_FILE_BML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_I/Tprofile.dat'
+SAMUEL_RHO_FILE_BML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat'
 
-SAMUEL_T_FILE_noBML = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_C/Tprofile.dat'
-SAMUEL_RHO_FILE_noBML = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_D/rho_profile.dat'
+SAMUEL_T_FILE_noBML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_C/Tprofile.dat'
+SAMUEL_RHO_FILE_noBML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_D/rho_profile.dat'
 
 colors = ['#282130', '#849DAB', '#CD5C5C', '#35838D',
           '#97795D', '#414F67', '#4198B9', '#2F4F4F']
@@ -73,7 +74,7 @@ P_out = no_bml['P'][mask]
 T_out = no_bml['T'][mask]
 idx   = np.argsort(P_out)  
 no_bml_out = np.column_stack([P_out[idx], np.zeros(len(idx)), T_out[idx]])
-# np.savetxt('/Users/chingchen/Desktop/HeFESTo/no_bml_on_hefestoP.in', no_bml_out, fmt='%.6f %.6f %.6f')
+# np.savetxt(f'{RUN_BASE}/no_bml_on_hefestoP.in', no_bml_out, fmt='%.6f %.6f %.6f')
 
 
 mask = (bml['P'] >= 1.0) & (bml['P'] <= 23.0)
@@ -81,11 +82,11 @@ P_out = bml['P'][mask]
 T_out = bml['T'][mask]
 idx   = np.argsort(P_out)
 bml_out = np.column_stack([P_out[idx], np.zeros(len(idx)), T_out[idx]])
-# np.savetxt('/Users/chingchen/Desktop/HeFESTo/bml_on_hefestoP.in', bml_out, fmt='%.6f %.6f %.6f')
-# PPP,_,TTT = np.loadtxt('/Users/chingchen/Desktop/HeFESTo/ad_samuel_noBML_on_hefestoP.in').T
+# np.savetxt(f'{RUN_BASE}/bml_on_hefestoP.in', bml_out, fmt='%.6f %.6f %.6f')
+# PPP,_,TTT = np.loadtxt(f'{RUN_BASE}/ad_samuel_noBML_on_hefestoP.in').T
 # plt.plot(PPP,TTT)
 
-# np.savetxt('/Users/chingchen/Desktop/HeFESTo/ad_samuel_BML_on_hefestoP.in', out)
+# np.savetxt(f'{RUN_BASE}/ad_samuel_BML_on_hefestoP.in', out)
 
 fig, (ax1, ax2,ax3) = plt.subplots(1, 3, figsize=(15, 8))
 

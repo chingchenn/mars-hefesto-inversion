@@ -16,12 +16,13 @@ import numpy as np
 import glob, os, re
 from scipy.interpolate import interp1d
 from obspy.taup.taup_create import build_taup_model
+from mars_config import DATA_BASE
 
 # ─────────────────────────────────────────────────
 # Paths and parameters
 # ─────────────────────────────────────────────────
-DATA_DIR   = "/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel/METADATA_BML/DATA_FIG2/PANEL_B"
-OUTPUT_DIR = "/Users/chingchen/Desktop/Lunar/mars_seismic_data/all_models"
+DATA_DIR   = f"{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel/METADATA_BML/DATA_FIG2/PANEL_B"
+OUTPUT_DIR = f"{DATA_BASE}/mars_seismic_data/all_models"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 MARS_RADIUS      = 3389.5   # km

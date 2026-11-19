@@ -12,6 +12,7 @@ import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, RUN_BASE
 # from scipy.interpolate import interp1d
 
 scale=1
@@ -26,9 +27,9 @@ BML_CASES = [
     ('26_EM1_BML_Mg50', 'Mg#=0.50', '#8c564b'),
 ]
 
-MODEL_DIR    = '/Users/chingchen/Desktop/Lunar/Mars_Khan_2023/LSL_Models'   
-SAMUEL_BASE  = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/'
-file_path = '/Users/chingchen/Desktop/HeFESTo/'
+MODEL_DIR    = KHAN_MODEL_DIR   
+SAMUEL_BASE  = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/'
+file_path = RUN_BASE
 g_mars = 3.35   # m/s²
 MARS_RADIUS = 3389.5   
 labelsize = 14
@@ -111,11 +112,11 @@ rho_med, rho_p16, rho_p84 = make_stats(khan_rho_list)
 
 # ── LOAD Samuel ───────────────────────────────────────────────────────────────
 
-# SAMUEL_T_FILE_BML = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_I/Tprofile.dat'
-# SAMUEL_RHO_FILE_BML = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat'
+# SAMUEL_T_FILE_BML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_I/Tprofile.dat'
+# SAMUEL_RHO_FILE_BML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat'
 
-# SAMUEL_T_FILE_noBML = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_C/Tprofile.dat'
-# SAMUEL_RHO_FILE_noBML = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_D/rho_profile.dat'
+# SAMUEL_T_FILE_noBML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_C/Tprofile.dat'
+# SAMUEL_RHO_FILE_noBML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_D/rho_profile.dat'
 
 
 Tliq,     depTliq     = np.loadtxt(SAMUEL_BASE+'PANEL_I/Tliq.dat').T

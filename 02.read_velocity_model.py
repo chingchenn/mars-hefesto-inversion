@@ -14,15 +14,16 @@ import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, RUN_BASE
 
 # ---------------- config ----------------
-SAMUEL_BASE  = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG2/'
+SAMUEL_BASE  = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG2/'
 PANEL_BML    = os.path.join(SAMUEL_BASE, 'PANEL_B')
 PANEL_NOBML  = os.path.join(SAMUEL_BASE, 'PANEL_A')
 
-KHAN_DIR     = '/Users/chingchen/Desktop/Lunar/Mars_Khan_2023/LSL_Models'
-# HEFESTO_1500 = '/Users/chingchen/Desktop/HeFESTo/ad_samuel_noBML/fort.56'
-HEFESTO_1400 = '/Users/chingchen/Desktop/HeFESTo/ad_samuel_noBML/fort.56'
+KHAN_DIR     = KHAN_MODEL_DIR
+# HEFESTO_1500 = f'{RUN_BASE}/ad_samuel_noBML/fort.56'
+HEFESTO_1400 = f'{RUN_BASE}/ad_samuel_noBML/fort.56'
 
 MARS_RADIUS = 3389.5   
 G_MARS      = 3.7      

@@ -16,8 +16,7 @@ import json
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
-
-RUNS_DIR = "/Users/chingchen/Desktop/HeFESTo/runs"
+from mars_config import RUNS_DIR
 
 # ============================================================
 # 讀取所有 model 的參數和狀態

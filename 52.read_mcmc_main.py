@@ -16,12 +16,13 @@ from scipy.optimize import brentq
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from scipy.interpolate import RegularGridInterpolator
+from mars_config import MCMC_DIR, RUN_BASE
 
 # ── 設定 ─────────────────────────────────────────────────────────────────────
-CHAIN_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain'
+CHAIN_DIR   = MCMC_DIR
 OUT_DIR     = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
 PREFIX      = 'chain_a31'
-PHASE_TABLE = '/Users/chingchen/Desktop/HeFESTo/mcmcfigures/bml_phase_table_prior_a31.npz'
+PHASE_TABLE = f'{RUN_BASE}/mcmcfigures/bml_phase_table_prior_a31.npz'
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 

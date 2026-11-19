@@ -20,9 +20,10 @@ MCMC 鏈的三張診斷圖:trace / misfit history / acceptance rate。
 import json, glob, os
 import numpy as np
 import matplotlib.pyplot as plt
+from mars_config import MCMC_DIR
 
 # ── 設定 ─────────────────────────────────────────────────────────────────────
-CHAIN_DIR = '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain'
+CHAIN_DIR = MCMC_DIR
 OUT_DIR   = '/Users/chingchen/Desktop/HeFESTo/mcmc/figures'
 PREFIX    = 'chain_a61t_YM'
 

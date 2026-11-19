@@ -18,20 +18,21 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from obspy.taup.taup_create import build_taup_model
 from obspy.taup import TauPyModel
+from mars_config import DATA_BASE
 
 
 # ─────────────────────────────────────────────────
 # build velocity model
 # ─────────────────────────────────────────────────
-DATA_DIR   = "/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel/METADATA_BML/DATA_FIG2/PANEL_B"
-OUTPUT_ND  = "/Users/chingchen/Desktop/Lunar/mars_seismic_data/mars_samuel_median.nd"       
-OUTPUT_NPZ = "/Users/chingchen/Desktop/Lunar/mars_seismic_data/mars_samuel_median"          
+DATA_DIR   = f"{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel/METADATA_BML/DATA_FIG2/PANEL_B"
+OUTPUT_ND  = f"{DATA_BASE}/mars_seismic_data/mars_samuel_median.nd"       
+OUTPUT_NPZ = f"{DATA_BASE}/mars_seismic_data/mars_samuel_median"          
 
 MARS_RADIUS = 3389.5   # km
 
 if not os.path.exists(OUTPUT_NPZ + ".npz"):
     print("Build TauPy model...")
-    build_taup_model(OUTPUT_ND, output_folder="/Users/chingchen/Desktop/Lunar/mars_seismic_data/")
+    build_taup_model(OUTPUT_ND, output_folder=f"{DATA_BASE}/mars_seismic_data/")
     print(f"mars_samuel_median.npz")
 else:
     print("✓model exist")

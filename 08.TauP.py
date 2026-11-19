@@ -30,13 +30,12 @@ import argparse
 
 from obspy.taup import TauPyModel
 from obspy.taup.taup_create import build_taup_model
+from mars_config import KHAN_MODEL_DIR, RUNS_DIR
 
 # ============================================================
 # 路徑設定
 # ============================================================
 
-RUNS_DIR       = "/Users/chingchen/Desktop/HeFESTo/runs"
-KHAN_MODEL_DIR = "/Users/chingchen/Desktop/Lunar/Mars_Khan_2023/LSL_Models"
 TAUP_DATA_DIR  = "/opt/anaconda3/lib/python3.9/site-packages/obspy/taup/data"
 
 # 火星常數

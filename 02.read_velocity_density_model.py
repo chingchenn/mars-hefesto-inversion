@@ -16,6 +16,7 @@ import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, RUN_BASE
 # from scipy.interpolate import interp1d
 
 scale=0.97
@@ -29,9 +30,9 @@ scale=0.97
 #          24_EM1_BML_Mg60,
 #          25_EM1_BML_Mg55,
 #          26_EM1_BML_Mg50]
-HEFESTO_FILE = '/Users/chingchen/Desktop/HeFESTo/01_YM_bulk_mantle_noBML_T/fort.56'
-MODEL_DIR    = '/Users/chingchen/Desktop/Lunar/Mars_Khan_2023/LSL_Models'   
-SAMUEL_BASE  = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/'
+HEFESTO_FILE = f'{RUN_BASE}/01_YM_bulk_mantle_noBML_T/fort.56'
+MODEL_DIR    = KHAN_MODEL_DIR   
+SAMUEL_BASE  = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/'
 # OUTPUT_FIG   = 'combined_HeFESTo_Khan2023.pdf'
 
 g_mars = 3.45   # m/s²

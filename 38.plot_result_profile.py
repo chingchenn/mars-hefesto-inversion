@@ -7,13 +7,13 @@ import os, glob, json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-MCMC_BASE_DIR  = '/Users/chingchen/Desktop/HeFESTo/mcmc/mcmc_chain'
+MCMC_BASE_DIR  = MCMC_DIR
 CHAIN_PREFIX   = 'chain_a34'
 HEF_PREFIX     = 'chain_a23'   # needs profile_sNNNNN.npz (a23 onward)
-KHAN_MODEL_DIR = '/Users/chingchen/Desktop/Lunar/Mars_Khan_2023/LSL_Models'
-SAMUEL_BASE    = ('/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/'
+SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
                   'Nature_Samuel/METADATA_BML/DATA_FIG1')
 
 DEPTH_MAX      = 1800

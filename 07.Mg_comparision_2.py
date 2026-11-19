@@ -20,9 +20,10 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from mars_config import RUN_BASE
 
 # ── CONFIG ─────────────────────────────────────────────────────────────────
-BASE_DIR = '/Users/chingchen/Desktop/HeFESTo'
+BASE_DIR = RUN_BASE
 
 CASES = [
     ('21_EM1_BML_Mg75', 0.75),

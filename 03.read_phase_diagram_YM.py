@@ -9,13 +9,14 @@ Created on Sun Mar 22 23:41:14 2026
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from mars_config import RUN_BASE
 
 # ── INPUT ─────────────────────────────────────
-# HEFESTO_1500 = '/Users/chingchen/Desktop/HeFESTo/ad_samuel_noBML/fort.66'
-# FORT56        = '/Users/chingchen/Desktop/HeFESTo/ad_samuel_noBML/fort.56'
+# HEFESTO_1500 = f'{RUN_BASE}/ad_samuel_noBML/fort.66'
+# FORT56        = f'{RUN_BASE}/ad_samuel_noBML/fort.56'
 
-HEFESTO_1500 = '/Users/chingchen/Desktop/HeFESTo/01_YM_bulk_mantle_noBML_T/fort.66'
-FORT56        = '/Users/chingchen/Desktop/HeFESTo/01_YM_bulk_mantle_noBML_T/fort.56'
+HEFESTO_1500 = f'{RUN_BASE}/01_YM_bulk_mantle_noBML_T/fort.66'
+FORT56        = f'{RUN_BASE}/01_YM_bulk_mantle_noBML_T/fort.56'
 
 
 g_mars = 3.72  # m/s²

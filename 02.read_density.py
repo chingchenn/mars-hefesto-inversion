@@ -11,6 +11,7 @@ import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from mars_config import RUN_BASE
 
 labelsize=15
 bwith=3
@@ -18,8 +19,8 @@ colors = ['#282130','#849DAB','#CD5C5C','#35838D',
           '#97795D','#414F67','#4198B9','#2F4F4F']
 
 g   = 3.72  # m/s^2
-file = '/Users/chingchen/Desktop/HeFESTo/YM_noBML_medium/fort.56'
-file = '/Users/chingchen/Desktop/HeFESTo/YM_noBML_high/fort.56'
+file = f'{RUN_BASE}/YM_noBML_medium/fort.56'
+file = f'{RUN_BASE}/YM_noBML_high/fort.56'
 with open(file) as f:
     f.readline()                   
     cols = f.readline().split()

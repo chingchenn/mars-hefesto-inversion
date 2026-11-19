@@ -5,14 +5,14 @@ import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mars_config import KHAN_MODEL_DIR
+from mars_config import KHAN_MODEL_DIR, DATA_BASE, RUN_BASE
 
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
-HEFESTO_FILE       = '/Users/chingchen/Desktop/HeFESTo/02_YM_bulk_mantle_BML_T/fort.56'
-SAMUEL_BASE        = '/Users/chingchen/Desktop/Lunar/Mars_Samuel_2023/Nature_Samuel/METADATA_BML/DATA_FIG1/'
-BEST_MANTLE_FORT56 = '/Users/chingchen/Desktop/HeFESTo/best_M04/files/mnt/user-data/outputs/best_run/mantle_step2/fort.56'
-BEST_BML_FORT56    = '/Users/chingchen/Desktop/HeFESTo/best_M04/files/mnt/user-data/outputs/best_run/bml/fort.56'
+HEFESTO_FILE       = f'{RUN_BASE}/02_YM_bulk_mantle_BML_T/fort.56'
+SAMUEL_BASE        = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel/METADATA_BML/DATA_FIG1/'
+BEST_MANTLE_FORT56 = f'{RUN_BASE}/best_M04/files/mnt/user-data/outputs/best_run/mantle_step2/fort.56'
+BEST_BML_FORT56    = f'{RUN_BASE}/best_M04/files/mnt/user-data/outputs/best_run/bml/fort.56'
 
 g_mars      = 3.35     # m/s^2
 MARS_RADIUS = 3389.5   # km

@@ -16,10 +16,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import os
+from mars_config import RUN_BASE
 
 # ── CONFIG ─────────────────────────────────────────
-BASE_DIR   = '/Users/chingchen/Desktop/HeFESTo'
-OUTPUT_PDF = '/Users/chingchen/Desktop/HeFESTo/phase_BML_comparison.pdf'
+BASE_DIR   = RUN_BASE
+OUTPUT_PDF = f'{RUN_BASE}/phase_BML_comparison.pdf'
 
 CASES = [
     ('21_EM1_BML_Mg75', 'BML  Mg#=0.75'),

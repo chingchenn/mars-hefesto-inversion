@@ -21,13 +21,11 @@ import json
 import numpy as np
 import pandas as pd
 import argparse
+from mars_config import KHAN_MODEL_DIR, RUNS_DIR
 
 # ============================================================
 # 路徑設定
 # ============================================================
-
-RUNS_DIR       = "/Users/chingchen/Desktop/HeFESTo/runs"
-KHAN_MODEL_DIR = "/Users/chingchen/Desktop/Lunar/Mars_Khan_2023/LSL_Models"
 
 # 火星常數
 G_MARS      = 3.35     # m/s²

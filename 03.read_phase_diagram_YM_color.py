@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
+from mars_config import RUN_BASE
 
 # ── CONFIG ─────────────────────────────────────────
 # model = [01_YM_bulk_mantle_noBML_T,
@@ -21,7 +22,7 @@ import matplotlib.patches as mpatches
 #          25_EM1_BML_Mg55,
 #          26_EM1_BML_Mg50]
 model='02_YM_bulk_mantle_BML_T'
-file_path = '/Users/chingchen/Desktop/HeFESTo/'
+file_path = RUN_BASE
 phase_file = file_path+model+'/fort.66'
 temp_file = file_path+model+'/ad.in'
 

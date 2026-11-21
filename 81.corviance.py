@@ -77,6 +77,12 @@ for d in dirs:
         print(f'  skip {name}')
         continue
     recs = load_jsonl(fp)
+    # a70: chains with a 9th parameter (w_C or w_H, appended after R_cmb in the main script)
+    for k9, st9 in (('w_C', 0.002), ('w_H', 0.001)):
+        if recs and k9 in recs[0]['params'] and k9 not in PARAM_ORDER:
+            PARAM_ORDER = PARAM_ORDER + (k9,)
+            STEP[k9] = st9
+            print(f'  {k9} found: {len(PARAM_ORDER)} parameters')
     if len(recs) < a.min_steps:
         print(f'  skip {name}: {len(recs)} steps')
         continue

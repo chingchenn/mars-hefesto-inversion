@@ -112,8 +112,8 @@ for i, k in enumerate(PARAM_ORDER):
     print(f'  {k:14s}  sd={sd[i]:10.4f}   STEP={STEP[k]:8.3f}   ratio={sd[i]/STEP[k]:5.2f}')
 
 print('\n|corr| > 0.5:')
-for i in range(8):
-    for j in range(i + 1, 8):
+for i in range(len(PARAM_ORDER)):
+    for j in range(i + 1, len(PARAM_ORDER)):
         if abs(corr[i, j]) > 0.5:
             print(f'  {PARAM_ORDER[i]:14s} {PARAM_ORDER[j]:14s} {corr[i, j]:+.3f}')
 
@@ -135,12 +135,13 @@ print(f'\nsaved {OUT_NPZ} and {START}/ ({len(os.listdir(START))} files)')
 os.makedirs('figures', exist_ok=True)
 fig, ax = plt.subplots(figsize=(7.5, 6.5))
 im = ax.imshow(corr, vmin=-1, vmax=1, cmap='RdBu_r')
-ax.set_xticks(range(8)); ax.set_yticks(range(8))
+nP = len(PARAM_ORDER)                                   # 8, or 9 with w_C / w_H
+ax.set_xticks(range(nP)); ax.set_yticks(range(nP))
 ax.set_xticklabels(PARAM_ORDER, rotation=45, ha='right')
 ax.set_yticklabels(PARAM_ORDER)
 ax.tick_params(labelsize=14)
-for i in range(8):
-    for j in range(8):
+for i in range(nP):
+    for j in range(nP):
         ax.text(j, i, f'{corr[i, j]:+.2f}', ha='center', va='center',
                 fontsize=9, color='k' if abs(corr[i, j]) < 0.6 else 'w')
 cb = fig.colorbar(im, ax=ax)

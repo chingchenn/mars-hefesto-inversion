@@ -22,6 +22,11 @@ Panels
              Both corners have this upper triangle (a61t: mantle Mg# differs between
              states, OVL 0.60, so the mantle corner is not left empty).
 
+v6 (a70/a71): runs with a 9th parameter (w_C or w_H, extra core light element) are detected
+     from chain.jsonl; the light element is inserted in the interior corner right after w_S
+     (so the w_S - w_X ridge sits next to the diagonal): 6x6, or 5x5 with DROP_MGBML.
+     8-parameter runs (a64 and older) give exactly the v5 figures.
+
 Changes from 113 v4
   - a60 settings: PREFIX, w_S prior 0.05-0.365, burn-in 40% and MIN_STEPS 400 (same as 63v2)
   - lower-triangle colour map: turbo + PowerNorm(gamma 0.5), smoothing 2.5 bins
@@ -87,11 +92,13 @@ PRIOR = {
     'BML_thickness': (   0.0,  400.0),
     'w_S':           (  0.00,  0.365),   # a62+ (a60/a61t: 0.05)
     'R_cmb':         (1400.0, 1900.0),
+    'w_C':           (   0.0,   0.02),   # v6: a70 (Fe3C), 26fall_main_mcmc_a70.py --light C
+    'w_H':           (   0.0,   0.01),   # v6: a71 (FeH),  --light H
 }
 LABELS = {'T_lit': r'$T_{lit}$ (K)', 'P_lit': r'$P_{lit}$ (GPa)',
           'Mg#': 'Mg# (mantle)', 'T_core': r'$T_{core}$ (K)',
           'Mg#_bulk_bml': r'Mg#$_{BML}$', 'BML_thickness': 'BML thickness (km)',
-          'w_S': r'$w_S$', 'R_cmb': r'$R_{CMB}$ (km)'}
+          'w_S': r'$w_S$', 'R_cmb': r'$R_{CMB}$ (km)', 'w_C': r'$w_C$', 'w_H': r'$w_H$'}
 
 GROUPS = {
     'mantle':   ['T_lit', 'P_lit', 'Mg#'],
@@ -162,6 +169,14 @@ if not names:
     raise SystemExit('no usable chains')
 chain_id = np.array(chain_id)
 print(f'{PREFIX}: {len(names)} chains, {len(samples)} post burn-in samples')
+
+# v6: extra core light element (9-parameter runs); inserted right after w_S
+LIGHT = [k for k in ('w_C', 'w_H') if k in samples[0]['params']]
+if LIGHT:
+    i_ws = GROUPS['interior'].index('w_S')
+    GROUPS['interior'] = GROUPS['interior'][:i_ws + 1] + LIGHT + GROUPS['interior'][i_ws + 1:]
+print(f'{PREFIX}: {8 + len(LIGHT)} parameters' + (f' (+ {", ".join(LIGHT)})' if LIGHT else '')
+      + f'   interior corner: {GROUPS["interior"]}')
 
 PLIST = sorted(set(sum(GROUPS.values(), [])))
 post = {p: np.array([float(s['params'].get(p, np.nan)) for s in samples]) for p in PLIST}

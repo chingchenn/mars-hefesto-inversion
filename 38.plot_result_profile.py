@@ -7,15 +7,14 @@ import os, glob, json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR
+from mars_config import KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR, SAMUEL_DIR
 SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 MCMC_BASE_DIR  = MCMC_DIR
 CHAIN_PREFIX   = 'chain_a34'
 HEF_PREFIX     = 'chain_a23'   # needs profile_sNNNNN.npz (a23 onward)
-SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
-                  'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
+SAMUEL_BASE    = (f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1')
 
 DEPTH_MAX      = 1800
 SPLICE_DEPTH   = 100.0

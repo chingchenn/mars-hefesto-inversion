@@ -16,12 +16,12 @@ import numpy as np
 import glob, os, re
 from scipy.interpolate import interp1d
 from obspy.taup.taup_create import build_taup_model
-from mars_config import DATA_BASE
+from mars_config import DATA_BASE, SAMUEL_DIR
 
 # ─────────────────────────────────────────────────
 # Paths and parameters
 # ─────────────────────────────────────────────────
-DATA_DIR   = f"{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG2/PANEL_B"
+DATA_DIR   = f"{SAMUEL_DIR}/METADATA_BML/DATA_FIG2/PANEL_B"
 OUTPUT_DIR = f"{DATA_BASE}/mars_seismic_data/all_models"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

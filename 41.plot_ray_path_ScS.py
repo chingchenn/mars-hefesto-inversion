@@ -18,13 +18,13 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from obspy.taup.taup_create import build_taup_model
 from obspy.taup import TauPyModel
-from mars_config import DATA_BASE
+from mars_config import DATA_BASE, SAMUEL_DIR
 
 
 # ─────────────────────────────────────────────────
 # build velocity model
 # ─────────────────────────────────────────────────
-DATA_DIR   = f"{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG2/PANEL_B"
+DATA_DIR   = f"{SAMUEL_DIR}/METADATA_BML/DATA_FIG2/PANEL_B"
 OUTPUT_ND  = f"{DATA_BASE}/mars_seismic_data/mars_samuel_median.nd"       
 OUTPUT_NPZ = f"{DATA_BASE}/mars_seismic_data/mars_samuel_median"          
 

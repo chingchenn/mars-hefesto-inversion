@@ -12,7 +12,7 @@ import json
 import types
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR
+from mars_config import KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR, SAMUEL_DIR
 SAVE_FIG = os.environ.get('SAVE_FIG') == '1'   # off by default; run with SAVE_FIG=1 to save to FIG_DIR
 HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 
@@ -20,8 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))   # folder of this script
 RUN            = 'a64'       # 'a60' for the old runs (YM20, TA, EH45)
 FORWARD_FILE   = f'{HERE}/26fall_main_mcmc_a63.py'   # a60: 26fall_main_mcmc.py
 CHAIN_ROOT     = MCMC_DIR
-SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
-                  'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
+SAMUEL_BASE    = (f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1')
 COMPS          = ['YM20']    # a64 is YM20 only; a60: ['YM20', 'TA', 'EH45']
 EXCLUDE        = []          # frozen chains, e.g. 'chain_a60_TA_05'
 BURN_FRAC      = 0.40

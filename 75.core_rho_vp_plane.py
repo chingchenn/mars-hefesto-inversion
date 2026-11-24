@@ -27,7 +27,7 @@ import matplotlib.pyplot as plt
 
 import mars_config as cfg
 import core_fes as CF
-from mars_config import DATA_BASE, KHAN_MODEL_DIR
+from mars_config import KHAN_MODEL_DIR, SAMUEL_DIR
 
 # ══════════════════════════════════════════════════════════════════════════
 # settings
@@ -46,7 +46,7 @@ OUT_DIR     = cfg.FIG_DIR
 TAG         = '75_' + PREFIX
 
 # literature profiles (same paths as 71.core_EoS_results.py)
-SAMUEL_BASE    = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1'
+SAMUEL_BASE    = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1'
 
 # Fe-FeS reference curves in panel (a)
 REF_P   = None                      # GPa; None = posterior median P_cmb

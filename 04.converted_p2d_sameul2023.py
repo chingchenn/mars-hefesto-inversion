@@ -8,18 +8,18 @@ Created on Sun Mar 22 20:50:00 2026
 
 import numpy as np
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, RUN_BASE
+from mars_config import RUN_BASE, SAMUEL_DIR
 
 
 
 MARS_RADIUS = 3389.5  
 g_mars = 3.72         
 
-SAMUEL_T_FILE_BML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_I/Tprofile.dat'
-SAMUEL_RHO_FILE_BML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat'
+SAMUEL_T_FILE_BML = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_I/Tprofile.dat'
+SAMUEL_RHO_FILE_BML = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat'
 
-SAMUEL_T_FILE_noBML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_C/Tprofile.dat'
-SAMUEL_RHO_FILE_noBML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_D/rho_profile.dat'
+SAMUEL_T_FILE_noBML = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_C/Tprofile.dat'
+SAMUEL_RHO_FILE_noBML = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_D/rho_profile.dat'
 
 colors = ['#282130', '#849DAB', '#CD5C5C', '#35838D',
           '#97795D', '#414F67', '#4198B9', '#2F4F4F']

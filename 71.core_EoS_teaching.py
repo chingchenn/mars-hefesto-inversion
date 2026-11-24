@@ -19,7 +19,7 @@ Created on Thu Jul 30 15:42:09 2026
 import numpy as np
 from scipy.optimize import brentq
 from scipy.integrate import solve_ivp
-from mars_config import DATA_BASE, KHAN_MODEL_DIR
+from mars_config import KHAN_MODEL_DIR, SAMUEL_DIR
 
 # numpy 1.x 叫 trapz,2.x 改名 trapezoid
 _trapz = getattr(np, 'trapezoid', None) or np.trapz
@@ -360,8 +360,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
-                  'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
+SAMUEL_BASE    = (f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1')
 
 R_MARS   = 3389.5
 DEPTH_LO = 1200.0            # 圖的上緣,留一點 mantle/BML 看 CMB 跳躍

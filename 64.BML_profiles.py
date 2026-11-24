@@ -31,14 +31,13 @@ import os, glob, json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR
+from mars_config import KHAN_MODEL_DIR, MCMC_DIR, FIG_DIR, SAMUEL_DIR
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 MCMC_BASE_DIR  = MCMC_DIR
 CHAIN_PREFIX   = 'chain_a52B'
 HEF_PREFIX     = 'chain_a21'
-SAMUEL_BASE    = (f'{DATA_BASE}/Mars_Samuel_2023/'
-                  'Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1')
+SAMUEL_BASE    = (f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1')
 OUT_DIR        = FIG_DIR
 
 DEPTH_MAX      = 1800        # Khan / Samuel 對照資料的深度上限(Z 網格用)

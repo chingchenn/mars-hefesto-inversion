@@ -10,15 +10,14 @@ import numpy as np
 import glob
 import os
 import re
-from mars_config import DATA_BASE
+from mars_config import SAMUEL_DIR
 
-SAMUEL_DATA_DIR = (f"{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG2/PANEL_B")
+SAMUEL_DATA_DIR = (f"{SAMUEL_DIR}/METADATA_BML/DATA_FIG2/PANEL_B")
 
-SAMUEL_RHO_PROFILE_PATH = (f"{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat")
+SAMUEL_RHO_PROFILE_PATH = (f"{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat")
 
 
-SAMUEL_FIG1K_DIR = (f"{DATA_BASE}/Mars_Samuel_2023/"
-                    "Nature_Samuel_s41586-023-06601-8/"
+SAMUEL_FIG1K_DIR = (f"{SAMUEL_DIR}/"
                     "METADATA_BML/DATA_FIG1/PANEL_K")
 
 import numpy as np

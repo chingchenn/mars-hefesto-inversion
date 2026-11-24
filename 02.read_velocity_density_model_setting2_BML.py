@@ -12,7 +12,7 @@ import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, RUN_BASE
+from mars_config import KHAN_MODEL_DIR, RUN_BASE, SAMUEL_DIR
 # from scipy.interpolate import interp1d
 
 scale=1
@@ -28,7 +28,7 @@ scale=1
 #          26_EM1_BML_Mg50]
 HEFESTO_FILE = f'{RUN_BASE}/02_YM_bulk_mantle_BML_T/fort.56'
 MODEL_DIR    = KHAN_MODEL_DIR   
-SAMUEL_BASE  = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/'
+SAMUEL_BASE  = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/'
 # OUTPUT_FIG   = 'combined_HeFESTo_Khan2023.pdf'
 
 g_mars = 3.35   # m/s²
@@ -107,11 +107,11 @@ rho_med, rho_p16, rho_p84 = make_stats(khan_rho_list)
 
 # ── LOAD Samuel ───────────────────────────────────────────────────────────────
 
-# SAMUEL_T_FILE_BML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_I/Tprofile.dat'
-# SAMUEL_RHO_FILE_BML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat'
+# SAMUEL_T_FILE_BML = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_I/Tprofile.dat'
+# SAMUEL_RHO_FILE_BML = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_J/rho_profile.dat'
 
-# SAMUEL_T_FILE_noBML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_C/Tprofile.dat'
-# SAMUEL_RHO_FILE_noBML = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG1/PANEL_D/rho_profile.dat'
+# SAMUEL_T_FILE_noBML = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_C/Tprofile.dat'
+# SAMUEL_RHO_FILE_noBML = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG1/PANEL_D/rho_profile.dat'
 
 
 Tliq,     depTliq     = np.loadtxt(SAMUEL_BASE+'PANEL_I/Tliq.dat').T

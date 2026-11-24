@@ -14,10 +14,10 @@ import glob
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from mars_config import DATA_BASE, KHAN_MODEL_DIR, RUN_BASE
+from mars_config import KHAN_MODEL_DIR, RUN_BASE, SAMUEL_DIR
 
 # ---------------- config ----------------
-SAMUEL_BASE  = f'{DATA_BASE}/Mars_Samuel_2023/Nature_Samuel_s41586-023-06601-8/METADATA_BML/DATA_FIG2/'
+SAMUEL_BASE  = f'{SAMUEL_DIR}/METADATA_BML/DATA_FIG2/'
 PANEL_BML    = os.path.join(SAMUEL_BASE, 'PANEL_B')
 PANEL_NOBML  = os.path.join(SAMUEL_BASE, 'PANEL_A')
 

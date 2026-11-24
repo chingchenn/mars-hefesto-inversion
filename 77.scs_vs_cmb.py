@@ -11,7 +11,13 @@ Rows (shared x = radius, km)
       plus this study: R_ScS (pooled) and R_CMB per state (16-84%), because R_CMB is bimodal
   (b) posterior histograms of R_CMB and R_ScS = R_CMB + h_liq, with sd in the legend;
       grey band = outside the R_CMB prior (left of 1400 km)
-  (c) optional (PANEL_C): w_S vs R_CMB by state, with w_S = 0 (pure Fe, no Ni)
+  (c) optional (PANEL_C): w_S vs R_CMB by state (main run), with w_S = 0 (pure Fe, no Ni)
+  (d) optional (PANEL_LIGHT): light element (w_C, w_H, wt%) vs R_CMB, one colour per run
+  (e) optional (PANEL_TRADE): h_liq vs R_CMB, one colour per run; dotted lines = constant
+      R_ScS. Shows where each core composition puts the samples along the R_ScS trade-off.
+
+Several runs (RUNS): the first is the main run (filled histograms, per-state rows, panel c);
+the others (light-element runs) add rows to (a), step outlines to (b), points to (d) and (e).
 
 Changes from 15_radius_ScS_Rcmb.py
   * a64, mars_config paths, burn-in 0.4 (same as 63v2, 75, 76, 89, 113)
@@ -19,6 +25,7 @@ Changes from 15_radius_ScS_Rcmb.py
   * this study's R_CMB rows added (per state), the prior wall is shaded
   * colours no longer clash with the state colours (molten #CD5C5C was the R_ScS colour)
   * optional panel (c); figure saved to cfg.FIG_DIR
+  * 11/23: several runs (a64 Fe-S vs a7x with C or H), panels (d) and (e)
 """
 
 import json, glob, os
@@ -31,8 +38,11 @@ import mars_config as cfg
 # settings
 # ══════════════════════════════════════════════════════════════════════════
 CHAIN_DIR   = cfg.MCMC_DIR
-PREFIX      = 'chain_a64_YM20'
-EXCLUDE     = []
+# (label, chain prefix, core, colour)   first = main run
+RUNS = [('a64', 'chain_a64_YM20', 'Fe-S',   '#333333'),
+        ('a74', 'chain_a74_YM20', 'Fe-S-C', '#FF8C00'),     # C <= 5%, hard SKS (stage 1)
+        ('a73', 'chain_a73_YM20', 'Fe-S-H', '#1F77B4')]     # H <= 1%, hard SKS
+EXCLUDE     = ['chain_a71_YM20_10', 'chain_a71_YM20_12']    # stuck without SKS (155)
 BURNIN_FRAC = 0.4
 DROP_LAST   = 1
 MIN_STEPS   = 100            # a64 is still running; raise to 400 when finished
@@ -59,7 +69,10 @@ SHOW_OWN     = True
 OWN_BY_STATE = True          # R_CMB is bimodal: one row per state instead of a pooled bar
 OWN_STATES   = ['molten', 'layered', 'solid']
 OWN_Q        = (16.0, 84.0)
-PANEL_C      = True          # w_S vs R_CMB below the histograms
+PANEL_C      = True          # w_S vs R_CMB below the histograms (main run)
+PANEL_LIGHT  = True          # light element vs R_CMB, per run
+PANEL_TRADE  = True          # h_liq vs R_CMB, per run
+EXTRA_LS     = ['--', ':', '-.']   # line styles of the extra runs in panel (b)
 N_SCATTER    = 6000
 SEED         = 0
 
@@ -100,69 +113,90 @@ def load_jsonl(path):
     return recs
 
 
-samples = []
-for d in sorted(glob.glob(os.path.join(CHAIN_DIR, PREFIX + '_*'))):
-    name = os.path.basename(d)
-    path = os.path.join(d, 'chain.jsonl')
-    if name in EXCLUDE or not os.path.exists(path):
+def load_run(prefix):
+    samples = []
+    for d in sorted(glob.glob(os.path.join(CHAIN_DIR, prefix + '_*'))):
+        name = os.path.basename(d)
+        path = os.path.join(d, 'chain.jsonl')
+        if name in EXCLUDE or not os.path.exists(path):
+            continue
+        recs = load_jsonl(path)[:-DROP_LAST or None]
+        if len(recs) < MIN_STEPS:
+            print(f'  {name:<24s} skipped ({len(recs)} steps)')
+            continue
+        samples += recs[int(len(recs) * BURNIN_FRAC):]
+    if not samples:
+        return None
+    print(f'{prefix}: {len(samples)} post burn-in samples')
+
+    def g(s, k):
+        v = s.get('params', {}).get(k, s.get(k))
+        return np.nan if v is None else float(v)
+
+    R_cmb = np.array([g(s, 'R_cmb') for s in samples])
+    w_S   = np.array([g(s, 'w_S') for s in samples])
+    H_bml = np.array([g(s, 'BML_thickness') for s in samples])
+    h_sol = np.array([g(s, 'h_solid_km') for s in samples])
+    h_liq = np.array([g(s, 'h_liquid_km') for s in samples])
+    w_X, x_key = np.full(len(samples), np.nan), None
+    for k in ('w_C', 'w_H'):
+        if k in samples[0]['params']:
+            w_X, x_key = np.array([g(s, k) for s in samples]), k
+
+    state = np.full(len(samples), 'fail', dtype='<U8')
+    s_y, l_y = np.nan_to_num(h_sol) >= H_STATE_TOL, np.nan_to_num(h_liq) >= H_STATE_TOL
+    state[s_y & l_y] = 'layered'
+    state[~s_y & l_y] = 'molten'
+    state[s_y & ~l_y] = 'solid'
+    state[H_bml < H_STATE_TOL] = 'none'
+    h_liq = np.where(state == 'none', 0.0, np.nan_to_num(h_liq))
+
+    good = np.isfinite(R_cmb) & (state != 'fail')
+    rc, hl = R_cmb[good], h_liq[good]
+    return dict(rc=rc, hl=hl, rs=rc + hl,          # ScS reflects from the top of the liquid
+                st=state[good], ws=w_S[good], wx=w_X[good], x_key=x_key)
+
+
+D = {}
+for lab, prefix, core, col in RUNS:
+    d = load_run(prefix)
+    if d is None:
+        print(f'{lab}: no usable chains')
         continue
-    recs = load_jsonl(path)[:-DROP_LAST or None]
-    if len(recs) < MIN_STEPS:
-        print(f'  {name:<24s} skipped ({len(recs)} steps)')
-        continue
-    samples += recs[int(len(recs) * BURNIN_FRAC):]
-if not samples:
-    raise SystemExit(f'no usable chains for {PREFIX}')
-print(f'{PREFIX}: {len(samples)} post burn-in samples')
-
-
-def g(s, k):
-    v = s.get('params', {}).get(k, s.get(k))
-    return np.nan if v is None else float(v)
-
-
-R_cmb = np.array([g(s, 'R_cmb') for s in samples])
-w_S   = np.array([g(s, 'w_S') for s in samples])
-H_bml = np.array([g(s, 'BML_thickness') for s in samples])
-h_sol = np.array([g(s, 'h_solid_km') for s in samples])
-h_liq = np.array([g(s, 'h_liquid_km') for s in samples])
-
-state = np.full(len(samples), 'fail', dtype='<U8')
-s_y, l_y = np.nan_to_num(h_sol) >= H_STATE_TOL, np.nan_to_num(h_liq) >= H_STATE_TOL
-state[s_y & l_y] = 'layered'
-state[~s_y & l_y] = 'molten'
-state[s_y & ~l_y] = 'solid'
-state[H_bml < H_STATE_TOL] = 'none'
-h_liq = np.where(state == 'none', 0.0, np.nan_to_num(h_liq))
-
-good = np.isfinite(R_cmb) & (state != 'fail')
-rc, hl, st, ws = R_cmb[good], h_liq[good], state[good], w_S[good]
-rs = rc + hl                                     # ScS reflects from the top of the liquid
+    D[lab] = d
+MAIN = RUNS[0][0]
+if MAIN not in D:
+    raise SystemExit(f'no usable chains for the main run {MAIN}')
+COL  = {lab: col for lab, _, _, col in RUNS}
+CORE = {lab: core for lab, _, core, _ in RUNS}
+rc, hl, st, ws, rs = (D[MAIN][k] for k in ('rc', 'hl', 'st', 'ws', 'rs'))
 sd_rc, sd_rs = rc.std(ddof=1), rs.std(ddof=1)
 sd_prior = (PRIOR_RCMB[1] - PRIOR_RCMB[0]) / np.sqrt(12.0)
 
 # ══════════════════════════════════════════════════════════════════════════
 # numbers (printed, not on the figure)
 # ══════════════════════════════════════════════════════════════════════════
-print('\nmarginals (pooled)')
-for nm, x, sd in [('R_cmb', rc, sd_rc), ('R_ScS', rs, sd_rs)]:
-    print(f'  {nm}  5/50/95 = {np.percentile(x, [5, 50, 95]).round(0)}   sd {sd:.1f} km'
-          f'   shrinkage vs prior {100 * (1 - sd / sd_prior):.0f}%')
-print(f'  prior sd (uniform {PRIOR_RCMB[0]:.0f}-{PRIOR_RCMB[1]:.0f}) = {sd_prior:.1f} km')
+for lab, d in D.items():
+    print(f'\n== {lab} ({CORE[lab]}) marginals (pooled)')
+    for nm, x in [('R_cmb', d['rc']), ('R_ScS', d['rs'])]:
+        sd = x.std(ddof=1)
+        print(f'  {nm}  5/50/95 = {np.percentile(x, [5, 50, 95]).round(0)}   sd {sd:.1f} km'
+              f'   shrinkage vs prior {100 * (1 - sd / sd_prior):.0f}%')
+    print('  per state')
+    print(f"  {'state':<9s}{'n':>7s}{'med R_cmb':>11s}{'sd R_cmb':>10s}{'med R_ScS':>11s}"
+          f"{'sd R_ScS':>10s}{'med w_S':>9s}{'med w_X':>9s}{'R_cmb<1420':>12s}")
+    for s in STATES:
+        m = d['st'] == s
+        if m.sum() < 2:
+            continue
+        wx = np.median(d['wx'][m]) if d['x_key'] else np.nan
+        print(f"  {s:<9s}{m.sum():>7d}{np.median(d['rc'][m]):>11.0f}{d['rc'][m].std(ddof=1):>10.1f}"
+              f"{np.median(d['rs'][m]):>11.0f}{d['rs'][m].std(ddof=1):>10.1f}{np.median(d['ws'][m]):>9.3f}"
+              f"{wx:>9.4f}{np.mean(d['rc'][m] < PRIOR_RCMB[0] + 20):>12.3f}")
+print(f'\nprior sd (uniform {PRIOR_RCMB[0]:.0f}-{PRIOR_RCMB[1]:.0f}) = {sd_prior:.1f} km')
+print('solid and none: R_ScS = R_cmb by construction (h_liq = 0)')
 
-print('\nper state')
-print(f"  {'state':<9s}{'n':>7s}{'med R_cmb':>11s}{'sd R_cmb':>10s}{'med R_ScS':>11s}"
-      f"{'sd R_ScS':>10s}{'med w_S':>9s}{'R_cmb<1420':>12s}")
-for s in STATES:
-    m = st == s
-    if m.sum() < 2:
-        continue
-    print(f'  {s:<9s}{m.sum():>7d}{np.median(rc[m]):>11.0f}{rc[m].std(ddof=1):>10.1f}'
-          f'{np.median(rs[m]):>11.0f}{rs[m].std(ddof=1):>10.1f}{np.median(ws[m]):>9.3f}'
-          f'{np.mean(rc[m] < PRIOR_RCMB[0] + 20):>12.3f}')
-print('  solid and none: R_ScS = R_cmb by construction (h_liq = 0)')
-
-print('\nliterature: fraction of this study inside each range (not a compatibility test)')
+print(f'\nliterature: fraction of this study ({MAIN}) inside each range (not a compatibility test)')
 for nm, lo, hi, fam, use in LIT:
     x = rs if fam == 'fluid' else rc
     print(f'  {nm:<26s}{lo:>6.0f}-{hi:<6.0f}{fam:>7s}  {np.mean((x >= lo) & (x <= hi)):.3f}')
@@ -173,23 +207,26 @@ for nm, lo, hi, fam, use in LIT:
 rows = [(nm, lo, 0.5 * (lo + hi), hi, fam, False) for nm, lo, hi, fam, use in LIT if use]
 if SHOW_OWN:
     ql, qh = OWN_Q
-    if OWN_BY_STATE:
-        for s in OWN_STATES:
-            m = st == s
-            if m.sum() >= STATE_MIN_N:
-                a, b, c = np.percentile(rc[m], [ql, 50.0, qh])
-                rows.append((f'This study $R_{{CMB}}$ ({s})', a, b, c, 'metal', True))
-    else:
-        a, b, c = np.percentile(rc, [ql, 50.0, qh])
-        rows.append(('This study $R_{CMB}$', a, b, c, 'metal', True))
-    a, b, c = np.percentile(rs, [ql, 50.0, qh])
-    rows.append(('This study $R_{ScS}$', a, b, c, 'fluid', True))
+    for lab, d in D.items():
+        tag = f'{lab} {CORE[lab]}'
+        if OWN_BY_STATE:
+            for s in OWN_STATES:
+                m = d['st'] == s
+                if m.sum() >= STATE_MIN_N:
+                    a, b, c = np.percentile(d['rc'][m], [ql, 50.0, qh])
+                    rows.append((f'{tag} $R_{{CMB}}$ ({s})', a, b, c, 'metal', True))
+        else:
+            a, b, c = np.percentile(d['rc'], [ql, 50.0, qh])
+            rows.append((f'{tag} $R_{{CMB}}$', a, b, c, 'metal', True))
+        a, b, c = np.percentile(d['rs'], [ql, 50.0, qh])
+        rows.append((f'{tag} $R_{{ScS}}$', a, b, c, 'fluid', True))
 
 order = (sorted([t for t in rows if t[4] == 'metal'], key=lambda t: t[2])
          + sorted([t for t in rows if t[4] == 'fluid'], key=lambda t: t[2]))
 
 h_top = 0.34 * len(order) + 0.5
-heights = [h_top, 5.0] + ([4.0] if PANEL_C else [])
+heights = ([h_top, 5.0] + ([4.0] if PANEL_C else []) + ([3.5] if PANEL_LIGHT else [])
+           + ([4.0] if PANEL_TRADE else []))
 fig, axs = plt.subplots(len(heights), 1, figsize=(10.5, sum(heights) + 0.5), sharex=True,
                         gridspec_kw=dict(height_ratios=heights, hspace=0.08))
 axt, axb = axs[0], axs[1]
@@ -223,15 +260,24 @@ for x, col in [(rc, C_RCMB), (rs, C_RSCS)]:
     axb.hist(x, bins=bins, density=True, color=col, alpha=ALPHA, lw=0, zorder=2)
     axb.hist(x, bins=bins, density=True, histtype='step', color=col, lw=2.0, zorder=3)
     axb.axvline(np.median(x), color=col, ls='--', lw=1.6, zorder=4)
-axb.plot([], [], lw=7, color=C_RCMB, alpha=ALPHA, label=f'$R_{{CMB}}$ (metal core)   sd {sd_rc:.0f} km')
+axb.plot([], [], lw=7, color=C_RCMB, alpha=ALPHA,
+         label=f'{MAIN} $R_{{CMB}}$ (metal core)   sd {sd_rc:.0f} km')
 axb.plot([], [], lw=7, color=C_RSCS, alpha=ALPHA,
-         label=f'$R_{{ScS}} = R_{{CMB}} + h_{{liq}}$   sd {sd_rs:.0f} km')
+         label=f'{MAIN} $R_{{ScS}} = R_{{CMB}} + h_{{liq}}$   sd {sd_rs:.0f} km')
+for (lab, d), ls in zip([(k, v) for k, v in D.items() if k != MAIN], EXTRA_LS):
+    for x, col in [(d['rc'], C_RCMB), (d['rs'], C_RSCS)]:
+        axb.hist(x, bins=bins, density=True, histtype='step', color=col, lw=1.8, ls=ls, zorder=3)
+    axb.plot([], [], color='k', lw=1.8, ls=ls,
+             label=f"{lab} {CORE[lab]}   sd $R_{{CMB}}$ {d['rc'].std(ddof=1):.0f}, "
+                   f"$R_{{ScS}}$ {d['rs'].std(ddof=1):.0f} km")
 axb.set_ylabel('posterior density', fontsize=FS)
 axb.legend(loc='upper right', fontsize=FS - 3, framealpha=0.92)
 
 # (c) w_S vs R_CMB
+ip = 2
 if PANEL_C:
-    axc = axs[2]
+    axc = axs[ip]
+    ip += 1
     rng = np.random.default_rng(SEED)
     idx = rng.choice(len(rc), size=min(N_SCATTER, len(rc)), replace=False)
     for s in STATES:
@@ -243,6 +289,42 @@ if PANEL_C:
     axc.text(PRIOR_RCMB[0] + 5, 0.006, 'pure Fe (no Ni)', fontsize=FS - 3, va='bottom')
     axc.set_ylabel(r'$w_S$', fontsize=FS)
     axc.legend(loc='upper left', fontsize=FS - 4, markerscale=2, ncol=2)
+    axc.text(0.99, 0.95, MAIN, transform=axc.transAxes, ha='right', va='top', fontsize=FS - 2)
+
+# (d) light element vs R_CMB
+if PANEL_LIGHT:
+    axd = axs[ip]
+    ip += 1
+    rng = np.random.default_rng(SEED + 1)
+    for lab, d in D.items():
+        if not d['x_key']:
+            continue
+        idx = rng.choice(len(d['rc']), size=min(N_SCATTER, len(d['rc'])), replace=False)
+        axd.scatter(d['rc'][idx], 100 * d['wx'][idx], s=6, alpha=0.4, color=COL[lab],
+                    label=f"{lab} {d['x_key']}", rasterized=True)
+    axd.set_ylabel('light element (wt%)', fontsize=FS)
+    axd.set_ylim(bottom=0)
+    axd.legend(loc='upper left', fontsize=FS - 4, markerscale=2)
+
+# (e) h_liq vs R_CMB: where each core composition puts the samples on the R_ScS trade-off
+if PANEL_TRADE:
+    axe = axs[ip]
+    rng = np.random.default_rng(SEED + 2)
+    for r_scs in range(1600, 2000, 50):              # constant R_ScS: h_liq = R_ScS - R_CMB
+        xx = np.array(XLIM)
+        axe.plot(xx, r_scs - xx, ls=':', lw=0.8, color='0.6', zorder=1)
+        if XLIM[0] < r_scs - 400 < XLIM[1]:          # label at the top of the panel
+            axe.text(r_scs - 400, 402, f'$R_{{ScS}}$ {r_scs}', fontsize=FS - 6, color='0.45',
+                     ha='center', va='bottom')
+    for lab, d in D.items():
+        m = d['hl'] > 0
+        idx = np.flatnonzero(m)
+        idx = rng.choice(idx, size=min(N_SCATTER, len(idx)), replace=False)
+        axe.scatter(d['rc'][idx], d['hl'][idx], s=6, alpha=0.35, color=COL[lab],
+                    label=f'{lab} {CORE[lab]} ({np.mean(m):.2f} with liquid)', rasterized=True)
+    axe.set_ylim(0, 430)
+    axe.set_ylabel(r'$h_{liq}$ (km)', fontsize=FS)
+    axe.legend(loc='upper right', fontsize=FS - 4, markerscale=2)
 
 # prior wall (outside the R_CMB prior) on the posterior rows
 for ax in axs[1:]:
@@ -255,7 +337,7 @@ axs[-1].set_xlabel('radius (km)', fontsize=FS)
 fig.tight_layout(rect=[0, 0, 1, 0.96])
 if SAVE_FIG:
     os.makedirs(OUT_DIR, exist_ok=True)
-    out = os.path.join(OUT_DIR, f'77_{PREFIX}_radius.png')
+    out = os.path.join(OUT_DIR, f'77_{"_".join(D)}_radius.png')
     fig.savefig(out, dpi=200)
     print('\nsaved', out)
 plt.show()

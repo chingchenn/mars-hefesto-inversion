@@ -53,7 +53,7 @@ import matplotlib.patches as mpatches
 import mars_config as cfg
 from mars_config import FIG_DIR
 CHAIN_DIR = cfg.MCMC_DIR          # figures are saved next to this script
-PREFIX    = 'chain_a64_YM20'     # main result (YM20, Hd, gravity penalty); was chain_a61t_YM20
+PREFIX    = 'chain_a77_YM20'     # main result (YM20, Hd, gravity penalty); was chain_a61t_YM20
 EXCLUDE   = []
 
 BURNIN_FRAC = 0.4          # same as 63v2

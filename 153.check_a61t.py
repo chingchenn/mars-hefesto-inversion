@@ -27,7 +27,7 @@ import os, json
 import numpy as np
 from mars_config import MCMC_DIR
 
-NEW    = 'chain_a61t_YM20'
+NEW    = 'chain_a66_YM20'
 OLD    = 'chain_a60_YM20'
 CHAINS = range(8)
 SCALE  = [1.0, 1.0, 1.0, 1.0, 0.25, 0.25, 0.25, 0.25]

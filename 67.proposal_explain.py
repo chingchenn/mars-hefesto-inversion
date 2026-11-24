@@ -32,9 +32,15 @@ OUT_DIR  = cfg.FIG_DIR
 
 # run A and run B: prefix, chains to load, proposal (npz = None -> diagonal STEP), chains to draw, first step drawn
 A = dict(prefix='chain_a62_YM20', chains=list(range(16)), npz=None,                    scale=None,
-         show=[0, 3, 6, 9, 12], start=4000)
+         show=[0, 1, 3, 4], start=1000)
 B = dict(prefix='chain_a64_YM20', chains=list(range(16)), npz='prop_cov_a62_YM20.npz', scale=0.25,
-         show=[0, 3, 6, 9, 12], start=2000)
+         show=[0, 1, 3, 4], start=2000)
+
+#A = dict(prefix='chain_a60_YM20',  chains=list(range(16)), npz=None,                    scale=None,
+#         show=[3, ], start=6000)
+#B = dict(prefix='chain_a61t_YM20', chains=[4, 5, 6, 7],    npz='prop_cov_a60_YM20.npz', scale=0.25,
+#         show=[4, ], start=2200)
+
 # a60 / a61t pair: A = chain_a60_YM20, npz None, start 6000
 #                  B = chain_a61t_YM20, chains [4, 5, 6, 7] (scale 0.25 chains), npz prop_cov_a60_YM20.npz, start 2200
 CLOUD_FROM   = 'B'           # posterior cloud from the better-mixed run
@@ -51,7 +57,7 @@ CHAIN_COLORS = plt.cm.tab10.colors
 plt.rcParams['font.family'] = 'DejaVu Sans'
 
 for R in (A, B):
-    R['name'] = R['prefix'].split('_')[1]                       # 'chain_a62_YM20' -> 'a62'
+    R['name'] = R.get('label', R['prefix'].split('_')[1])     # 'chain_a62_YM20' -> 'a62'
     R['prop'] = 'diagonal proposal' if R['npz'] is None else f'covariance proposal (s = {R["scale"]})'
 
 # ── load ────────────────────────────────────────────────────────────────────

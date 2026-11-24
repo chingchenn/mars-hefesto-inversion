@@ -32,6 +32,7 @@ ap.add_argument('--burn_frac', type=float, default=0.4)    # same as 63v2
 ap.add_argument('--min_steps', type=int,   default=300)
 ap.add_argument('--blend',     type=float, default=0.2)    # Sigma = (1-b) Sigma_post + b diag(STEP^2)
 ap.add_argument('--exclude',   nargs='*',  default=[])
+ap.add_argument('--wx_step',   type=float, default=None)   # STEP of w_C / w_H (main script: 0.1*wc_max or 0.1*wh_max)
 a = ap.parse_args()
 
 RUN     = a.prefix.replace('chain_', '')
@@ -81,7 +82,7 @@ for d in dirs:
     for k9, st9 in (('w_C', 0.002), ('w_H', 0.001)):
         if recs and k9 in recs[0]['params'] and k9 not in PARAM_ORDER:
             PARAM_ORDER = PARAM_ORDER + (k9,)
-            STEP[k9] = st9
+            STEP[k9] = a.wx_step if a.wx_step is not None else st9
             print(f'  {k9} found: {len(PARAM_ORDER)} parameters')
     if len(recs) < a.min_steps:
         print(f'  skip {name}: {len(recs)} steps')

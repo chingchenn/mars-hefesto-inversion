@@ -52,7 +52,7 @@ for k in [k for k in sys.modules if k == 'ngibbs' or k.startswith('ngibbs.')]:
     del sys.modules[k]
 sys.path = [p for p in sys.path if not p.startswith(str(NG.NGIBBS_ROOT))]
 sys.path.insert(0, os.path.join(NEW_NGIBBS, 'src'))
-from ngibbs.engine.API import HeFESToMarsEmulatorCPU as EMN
+from ngibbs import HeFESToMarsEmulatorCPU as EMN          # new layout (Sep 2026): models at package level
 print('new nGibbs from', NEW_NGIBBS, ' training P bounds:', EMN.training_pressure_bounds())
 
 # ---------------------------------------------------------------- composition from a posterior sample
